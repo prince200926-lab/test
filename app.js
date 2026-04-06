@@ -1,4 +1,5 @@
 // Import required modules
+require('dotenv').config()
 const express = require('express');
 const path = require('path');
 const cors = require('cors');
@@ -1382,7 +1383,7 @@ app.listen(PORT, () => {
   console.log('🎓 RFID Attendance System Started');
   console.log('=================================');
   console.log(`Server: http://localhost:${PORT}`);
-  console.log(`Login: http://localhost:${PORT}/login.html`);
+  console.log(`Login: http://localhost:${PORT}`);
   console.log(`Database: SQLite (attendance.db)`);
   console.log(`\nDefault Admin:`);
   console.log(`  Username: admin`);

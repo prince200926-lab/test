@@ -1,3 +1,19 @@
+// ── DEEPLINK: restore tab if navigated from analytics page ───────────────────
+// Paste this block at the very TOP of admin-dashboard.js (before everything else)
+(function restoreTabFromDeeplink() {
+    const target = sessionStorage.getItem('adminTab');
+    if (!target) return;
+    sessionStorage.removeItem('adminTab');
+
+    // Wait for DOM to be ready then click the right nav item
+    window.addEventListener('DOMContentLoaded', () => {
+        const navItem = document.querySelector(`.nav-item[data-tab="${target}"]`);
+        if (navItem) navItem.click();
+    });
+})();
+// ─────────────────────────────────────────────────────────────────────────────
+
+
 // ==========================================
 // MOBILE MENU INITIALIZATION
 // ==========================================
