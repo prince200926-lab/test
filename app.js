@@ -1168,11 +1168,6 @@ app.post('/admin/students/bulk-import', auth.isAuthenticated, auth.isAdmin, (req
     });
   }
 });
-
-
-
-
-
 // ==========================================
 // UTILITY ENDPOINTS
 // ==========================================
@@ -1209,6 +1204,172 @@ app.get('/health', (req, res) => {
       status: 'unhealthy',
       error: error.message
     });
+  }
+});
+
+// ==========================================
+// ANALYTICS ENDPOINTS
+// ==========================================
+ 
+/**
+ * GET /api/analytics/students
+ * Returns all students with attendance % and grades for ML dashboard.
+ * Attendance % = (days present / total school days recorded) × 100
+ * Uses the attendance table to compute the real count per student.
+ */
+app.get('/api/analytics/students', auth.isAuthenticated, (req, res) => {
+  try {
+    const students = database.students.getAll();
+ 
+    // Get total distinct attendance days recorded in the system
+    const totalDaysStmt = database.db.prepare(`
+      SELECT COUNT(DISTINCT DATE(timestamp)) as total_days FROM attendance
+    `);
+    const { total_days } = totalDaysStmt.get();
+    const denominator = total_days || 1;
+ 
+    const result = students.map(student => {
+      // Days this student was present
+      const presentStmt = database.db.prepare(`
+        SELECT COUNT(DISTINCT DATE(timestamp)) as present_days
+        FROM attendance
+        WHERE student_id = ?
+      `);
+      const { present_days } = presentStmt.get(student.id);
+      const attendance = Math.round((present_days / denominator) * 100);
+ 
+      // Compute avg_score from grades columns if they exist, else default 0
+      const midterm    = student.midterm    || 0;
+      const final_score = student.final_score || 0;
+      const avg_score  = midterm && final_score ? Math.round((midterm + final_score) / 2) : 0;
+ 
+      // Auto-compute grade from avg_score if not stored
+      let grade = student.grade || null;
+      if (!grade && avg_score) {
+        if (avg_score >= 90)      grade = 'A';
+        else if (avg_score >= 75) grade = 'B';
+        else if (avg_score >= 60) grade = 'C';
+        else if (avg_score >= 45) grade = 'D';
+        else                      grade = 'F';
+      }
+ 
+      return {
+        id:           student.id,
+        name:         student.name,
+        class:        student.class,
+        roll_number:  student.roll_number,
+        card_id:      student.card_id,
+        attendance,
+        present_days,
+        total_days:   denominator,
+        midterm,
+        final_score,
+        avg_score,
+        grade,
+      };
+    });
+ 
+    res.json({ success: true, count: result.length, data: result });
+  } catch (error) {
+    console.error('Analytics students error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch analytics data' });
+  }
+});
+ 
+/**
+ * POST /api/analytics/import-grades
+ * Bulk update midterm, final_score, grade from CSV import.
+ * Body: { grades: [{ rollNumber, midterm, finalScore, grade }] }
+ *
+ * NOTE: This endpoint adds midterm / final_score / grade columns to the
+ * students table if they don't exist yet (safe migration).
+ */
+app.post('/api/analytics/import-grades', auth.isAuthenticated, auth.isAdmin, (req, res) => {
+  try {
+    // Safe-add grade columns to students table (idempotent)
+    ['midterm', 'final_score', 'grade'].forEach(col => {
+      try {
+        database.db.exec(`ALTER TABLE students ADD COLUMN ${col} ${col === 'grade' ? 'TEXT' : 'INTEGER'}`);
+      } catch (_) { /* column already exists — that's fine */ }
+    });
+ 
+    const { grades } = req.body;
+    if (!Array.isArray(grades) || !grades.length) {
+      return res.status(400).json({ success: false, message: 'grades array required' });
+    }
+ 
+    const updateStmt = database.db.prepare(`
+      UPDATE students SET midterm = ?, final_score = ?, grade = ?
+      WHERE roll_number = ?
+    `);
+ 
+    let updated = 0;
+    const doAll = database.db.transaction(() => {
+      grades.forEach(({ rollNumber, midterm, finalScore, grade }) => {
+        const info = updateStmt.run(midterm || 0, finalScore || 0, grade || null, String(rollNumber));
+        if (info.changes > 0) updated++;
+      });
+    });
+    doAll();
+ 
+    console.log(`✓ Grade import: updated ${updated} students`);
+    res.json({ success: true, updated });
+  } catch (error) {
+    console.error('Grade import error:', error);
+    res.status(500).json({ success: false, message: 'Import failed: ' + error.message });
+  }
+});
+ 
+/**
+ * POST /api/analytics/ai-insight
+ * Proxies the summary data to the Anthropic API and streams the result back.
+ * Body: { summary: string }
+ *
+ * Requires ANTHROPIC_API_KEY in environment:
+ *   set it with:  export ANTHROPIC_API_KEY=sk-ant-...
+ *   or add to a .env file and use: require('dotenv').config()
+ */
+app.post('/api/analytics/ai-insight', auth.isAuthenticated, async (req, res) => {
+  try {
+    const { summary } = req.body;
+    if (!summary) return res.status(400).json({ success: false, message: 'summary required' });
+ 
+    const apiKey = process.env.ANTHROPIC_API_KEY;
+    if (!apiKey) {
+      return res.status(500).json({
+        success: false,
+        message: 'ANTHROPIC_API_KEY not set. Add it to your environment: export ANTHROPIC_API_KEY=sk-ant-...'
+      });
+    }
+ 
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1024,
+        messages: [{
+          role: 'user',
+          content: `You are an educational data analyst for an Indian school RFID attendance system. Analyse this student attendance and academic performance data. Write 3–4 focused paragraphs covering: (1) key trend findings and what the correlation coefficient means in plain English, (2) which students need immediate intervention and exactly why, (3) predicted outcomes if attendance improves — give specific numbers, (4) concrete actionable steps for teachers this week. Be direct and specific.\n\n${summary}`
+        }]
+      })
+    });
+ 
+    const data = await response.json();
+ 
+    if (data.error) {
+      return res.status(500).json({ success: false, message: data.error.message });
+    }
+ 
+    const insight = (data.content || []).map(b => b.text || '').join('');
+    res.json({ success: true, insight });
+  } catch (error) {
+    console.error('AI insight error:', error);
+    res.status(500).json({ success: false, message: 'AI request failed: ' + error.message });
   }
 });
 

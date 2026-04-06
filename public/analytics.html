@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ML Analytics - RFID Attendance</title>
+    <link rel="stylesheet" href="dashboard-style.css">
+    <style>
+        .analytics-wrap { padding: 0; }
+        .tab-bar { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 20px; }
+        .tab-btn {
+            padding: 8px 16px; border: 1px solid #e0e0e0; border-radius: 8px;
+            cursor: pointer; font-size: 13px; background: white; color: #666; transition: all .2s;
+        }
+        .tab-btn.active { background: #e3f2fd; color: #185FA5; border-color: #378ADD; font-weight: 500; }
+        .tab-pane { display: none; } .tab-pane.active { display: block; }
+        .metric-row { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+        .metric-card {
+            flex: 1; min-width: 120px; background: #f8f9fa; border-radius: 8px; padding: 14px;
+        }
+        .metric-card .label { font-size: 11px; color: #888; margin-bottom: 4px; }
+        .metric-card .value { font-size: 24px; font-weight: 500; color: #333; }
+        .metric-card .sub { font-size: 11px; color: #888; margin-top: 2px; }
+        .chart-card {
+            background: white; border: 1px solid #e8e8e8; border-radius: 12px;
+            padding: 16px; margin-bottom: 16px; overflow: hidden;
+        }
+        .chart-card h3 { font-size: 14px; font-weight: 500; margin: 0 0 4px 0; color: #333; }
+        .chart-card .sub { font-size: 12px; color: #888; margin-bottom: 12px; }
+        .scatter-wrap { width: 100%; height: 300px; position: relative; }
+        .bar-wrap { width: 100%; height: 180px; position: relative; }
+        .line-wrap { width: 100%; height: 200px; position: relative; }
+        .data-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .data-table th {
+            background: #f8f9fa; padding: 8px 10px; text-align: left;
+            font-weight: 500; color: #666; border-bottom: 1px solid #eee; white-space: nowrap;
+        }
+        .data-table td { padding: 8px 10px; border-bottom: 1px solid #f0f0f0; }
+        .data-table tr:hover td { background: #fafafa; }
+        .data-table tr.risk td { background: #fff5f5; }
+        .att-high { color: #0F6E56; font-weight: 500; }
+        .att-mid  { color: #BA7517; font-weight: 500; }
+        .att-low  { color: #A32D2D; font-weight: 500; }
+        .grade-pill {
+            display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 500;
+        }
+        .grade-A { background: #EAF3DE; color: #3B6D11; }
+        .grade-B { background: #E6F1FB; color: #185FA5; }
+        .grade-C { background: #FAEEDA; color: #854F0B; }
+        .grade-D { background: #FAECE7; color: #993C1D; }
+        .grade-F { background: #FCEBEB; color: #A32D2D; }
+        .risk-card {
+            background: white; border: 1px solid #FAC775; border-left: 3px solid #EF9F27;
+            border-radius: 12px; padding: 14px 16px; margin-bottom: 10px;
+        }
+        .risk-card.critical { border-color: #F09595; border-left-color: #E24B4A; }
+        .risk-header { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+        .risk-name { font-weight: 500; font-size: 15px; color: #333; }
+        .risk-sub  { font-size: 12px; color: #888; }
+        .risk-tags { display: flex; gap: 6px; flex-wrap: wrap; }
+        .tag { font-size: 10px; padding: 2px 8px; border-radius: 4px; font-weight: 500; }
+        .tag-att  { background: #FCEBEB; color: #A32D2D; }
+        .tag-sc   { background: #FAEEDA; color: #854F0B; }
+        .tag-crit { background: #E24B4A; color: white; }
+        .risk-stats { display: flex; gap: 20px; font-size: 12px; flex-wrap: wrap; color: #555; }
+        .risk-stats span { color: #888; }
+        .risk-rec { font-size: 11px; color: #888; border-top: 1px solid #f0f0f0; padding-top: 8px; margin-top: 8px; }
+        .predict-slider { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
+        .predict-slider label { font-size: 13px; color: #666; min-width: 80px; }
+        .predict-slider input[type=range] { flex: 1; }
+        .predict-slider .val { font-size: 16px; font-weight: 500; min-width: 40px; }
+        .predict-boxes { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+        .predict-box { flex: 1; min-width: 120px; background: #f8f9fa; border-radius: 8px; padding: 14px; }
+        .predict-box .lbl { font-size: 11px; color: #888; margin-bottom: 4px; }
+        .predict-box .big { font-size: 32px; font-weight: 500; }
+        .predict-box .note { font-size: 12px; color: #888; margin-top: 2px; }
+        .model-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 12px; color: #666; }
+        .model-grid span { color: #333; }
+        .ai-section { background: white; border: 1px solid #e8e8e8; border-radius: 12px; padding: 16px; margin-bottom: 12px; }
+        .ai-section h3 { font-size: 14px; font-weight: 500; margin: 0 0 4px 0; color: #333; }
+        .ai-section .desc { font-size: 12px; color: #888; margin-bottom: 14px; }
+        .ai-run-btn {
+            padding: 10px 20px; background: #185FA5; color: white; border: none;
+            border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: 500;
+        }
+        .ai-run-btn:disabled { background: #ccc; cursor: default; }
+        .ai-output {
+            background: white; border: 1px solid #e8e8e8; border-radius: 12px;
+            padding: 16px; font-size: 13px; line-height: 1.8; color: #333; white-space: pre-wrap;
+        }
+        .ai-output-title { font-weight: 500; font-size: 13px; color: #185FA5; margin-bottom: 12px; }
+        .empty-box { text-align: center; padding: 2rem; background: #f8f9fa; border-radius: 12px; color: #888; font-size: 13px; }
+        .corr-bar { height: 8px; border-radius: 4px; background: #e0e0e0; margin-top: 6px; overflow: hidden; }
+        .corr-fill { height: 100%; border-radius: 4px; transition: width .4s; }
+        .import-box { background: #E1F5EE; border-radius: 8px; padding: 9px 12px; font-size: 11px; color: #085041; margin-bottom: 8px; }
+        .import-row { display: flex; gap: 8px; align-items: flex-start; }
+        .import-row textarea { flex: 1; height: 70px; font-size: 11px; font-family: monospace; resize: vertical; border: 1px solid #e0e0e0; border-radius: 6px; padding: 6px; }
+        .loading-msg { text-align: center; padding: 2rem; color: #888; font-size: 13px; }
+        .info-tag { background: #e3f2fd; color: #185FA5; font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 500; display: inline-block; margin-bottom: 12px; }
+        @media (max-width: 768px) {
+            .metric-row { gap: 8px; }
+            .scatter-wrap { height: 220px; }
+            .predict-boxes { gap: 8px; }
+            .model-grid { grid-template-columns: 1fr; }
+        }
+    </style>
+</head>
+<body>
+<div class="dashboard">
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <h2>🎓 RFID System</h2>
+            <p id="userName">Loading...</p>
+        </div>
+        <nav class="sidebar-nav">
+            <a href="/admin-dashboard.html" class="nav-item">👥 Teachers</a>
+            <a href="/admin-dashboard.html" class="nav-item">📚 Assignments</a>
+            <a href="/admin-dashboard.html" class="nav-item">👨‍🎓 Students</a>
+            <a href="/admin-dashboard.html" class="nav-item">📊 Attendance</a>
+            <a href="/analytics.html" class="nav-item active">🤖 ML Analytics</a>
+        </nav>
+        <button class="logout-btn" id="logoutBtn">🚪 Logout</button>
+    </aside>
+
+    <main class="main-content">
+        <div class="top-bar">
+            <h1>ML Analytics</h1>
+            <div class="top-bar-info">
+                <span id="currentDate"></span>
+            </div>
+        </div>
+
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
+            <div style="font-size:13px;color:#666;">Correlation analysis · linear regression · risk detection · AI predictions</div>
+            <div style="display:flex;gap:8px;align-items:center;">
+                <select id="classFilter" style="font-size:13px;padding:6px 10px;border:1px solid #e0e0e0;border-radius:6px;">
+                    <option value="All">All classes</option>
+                </select>
+                <button onclick="loadAnalytics()" style="padding:6px 14px;background:#667eea;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px;">🔄 Refresh</button>
+            </div>
+        </div>
+
+        <div class="tab-bar">
+            <button class="tab-btn active" onclick="switchTab('overview',this)">Overview</button>
+            <button class="tab-btn" onclick="switchTab('scatter',this)">Correlation</button>
+            <button class="tab-btn" onclick="switchTab('risk',this)">At-risk</button>
+            <button class="tab-btn" onclick="switchTab('predict',this)">Predictor</button>
+            <button class="tab-btn" onclick="switchTab('ai',this)">AI insight</button>
+        </div>
+
+        <!-- OVERVIEW -->
+        <div class="tab-pane active" id="tab-overview">
+            <div class="metric-row" id="overviewMetrics"><div class="loading-msg">Loading...</div></div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;" id="overviewCharts"></div>
+            <div class="chart-card" id="studentTableWrap"></div>
+            <div class="import-box">Import grades from school portal. Format per line: <code>rollNumber,midterm,final,grade</code> (e.g. <code>101,88,91,A</code>)</div>
+            <div class="import-row">
+                <textarea id="importCsv" placeholder="101,88,91,A&#10;102,51,48,D&#10;103,72,75,B"></textarea>
+                <div style="display:flex;flex-direction:column;gap:6px;">
+                    <button onclick="doImport()" style="white-space:nowrap;padding:8px 14px;border:1px solid #e0e0e0;border-radius:6px;cursor:pointer;background:white;font-size:13px;">Import grades</button>
+                    <div id="importMsg" style="font-size:11px;color:#0F6E56;"></div>
+                </div>
+            </div>
+        </div>
+
+        <!-- SCATTER / CORRELATION -->
+        <div class="tab-pane" id="tab-scatter">
+            <div class="metric-row" id="corrMetrics"></div>
+            <div class="chart-card">
+                <h3>Attendance vs academic score — scatter + regression</h3>
+                <div class="sub">Each dot = one student · red line = OLS linear regression fit</div>
+                <div class="scatter-wrap"><canvas id="scatterChart"></canvas></div>
+                <div id="corrFormula" style="margin-top:10px;background:#f8f9fa;border-radius:8px;padding:10px 12px;font-size:12px;color:#555;line-height:1.7;"></div>
+            </div>
+        </div>
+
+        <!-- AT-RISK -->
+        <div class="tab-pane" id="tab-risk">
+            <div class="metric-row" id="riskMetrics"></div>
+            <div id="riskList"></div>
+        </div>
+
+        <!-- PREDICTOR -->
+        <div class="tab-pane" id="tab-predict">
+            <div class="chart-card">
+                <h3>Score predictor — drag to simulate attendance</h3>
+                <div class="predict-slider" style="margin-top:14px;">
+                    <label>Attendance</label>
+                    <input type="range" min="10" max="100" step="1" value="75" id="predSlider" oninput="updatePredictor()">
+                    <span class="val" id="predVal">75%</span>
+                </div>
+                <div class="predict-boxes" id="predictBoxes"></div>
+                <div class="line-wrap"><canvas id="predChart"></canvas></div>
+            </div>
+            <div class="chart-card">
+                <h3>Model details</h3>
+                <div class="model-grid" id="modelDetails"></div>
+            </div>
+        </div>
+
+        <!-- AI -->
+        <div class="tab-pane" id="tab-ai">
+            <div class="ai-section">
+                <h3>AI-powered analysis via Claude</h3>
+                <div class="desc">Sends live attendance + grade data from your database to Claude for deep pattern analysis, intervention recommendations, and outcome predictions.</div>
+                <div class="metric-row" id="aiSummaryMetrics"></div>
+                <button class="ai-run-btn" id="aiBtn" onclick="runAI()">Run AI analysis ↗</button>
+            </div>
+            <div id="aiOutput"></div>
+        </div>
+    </main>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.js"></script>
+<script src="analytics.js"></script>
+</body>
+</html>
