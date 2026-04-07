@@ -1,0 +1,669 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Marks Entry - RFID Attendance</title>
+    <link rel="stylesheet" href="dashboard-style.css">
+    <style>
+        /* ── Page-specific overrides ── */
+        .nav-item-marks   { background: rgba(255,255,255,0.18) !important; border-left: 3px solid white !important; }
+        .nav-sep          { height: 1px; background: rgba(255,255,255,0.15); margin: 6px 0; }
+        .nav-section-label{ padding: 10px 20px 4px; color: rgba(255,255,255,0.55); font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px; }
+
+        /* ── Control bar ── */
+        .control-bar {
+            display: flex; gap: 10px; flex-wrap: wrap;
+            align-items: center; margin-bottom: 20px;
+        }
+        .control-bar select, .control-bar input[type=text] {
+            padding: 8px 12px; border: 1px solid #e0e0e0;
+            border-radius: 8px; font-size: 13px; background: white;
+        }
+        .btn-green { background: #4CAF50; color: white; border: none; border-radius: 8px; padding: 9px 18px; cursor: pointer; font-size: 13px; font-weight: 500; }
+        .btn-green:hover { background: #43a047; }
+        .btn-blue  { background: #185FA5; color: white; border: none; border-radius: 8px; padding: 9px 18px; cursor: pointer; font-size: 13px; font-weight: 500; }
+        .btn-blue:hover  { background: #1565C0; }
+        .btn-orange{ background: #FF9800; color: white; border: none; border-radius: 8px; padding: 9px 18px; cursor: pointer; font-size: 13px; font-weight: 500; }
+        .btn-orange:hover{ background: #F57C00; }
+
+        /* ── Subject tabs ── */
+        .subject-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 16px; }
+        .subject-tab {
+            padding: 7px 14px; border: 1px solid #e0e0e0; border-radius: 20px;
+            cursor: pointer; font-size: 12px; background: white; color: #666; transition: all .2s;
+        }
+        .subject-tab.active { background: #667eea; color: white; border-color: #667eea; }
+
+        /* ── Marks table ── */
+        .marks-table-wrap { overflow-x: auto; }
+        .marks-table { width: 100%; border-collapse: collapse; font-size: 13px; min-width: 700px; }
+        .marks-table th {
+            background: #f8f9fa; padding: 10px 8px; text-align: center;
+            font-weight: 500; color: #555; border-bottom: 2px solid #e0e0e0;
+            white-space: nowrap;
+        }
+        .marks-table th.left { text-align: left; }
+        .marks-table td { padding: 6px 8px; border-bottom: 1px solid #f0f0f0; vertical-align: middle; }
+        .marks-table tr:hover td { background: #fafafa; }
+        .marks-table tr.saved td { background: #f1f8e9; }
+
+        /* ── Mark inputs ── */
+        .mark-input {
+            width: 62px; padding: 6px 8px; border: 1px solid #e0e0e0;
+            border-radius: 6px; font-size: 13px; text-align: center;
+            transition: border-color .2s;
+        }
+        .mark-input:focus { outline: none; border-color: #667eea; }
+        .mark-input.over  { border-color: #E24B4A; background: #fff5f5; }
+        .mark-input.good  { border-color: #4CAF50; }
+
+        /* ── Grade pill ── */
+        .grade-pill { display: inline-block; padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600; min-width: 28px; text-align: center; }
+        .g-A { background: #EAF3DE; color: #3B6D11; }
+        .g-B { background: #E6F1FB; color: #185FA5; }
+        .g-C { background: #FAEEDA; color: #854F0B; }
+        .g-D { background: #FAECE7; color: #993C1D; }
+        .g-F { background: #FCEBEB; color: #A32D2D; }
+        .g-  { background: #f0f0f0; color: #999; }
+
+        /* ── Save status ── */
+        .save-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+        .status-dot  { width: 8px; height: 8px; border-radius: 50%; background: #ccc; }
+        .status-dot.saving  { background: #FF9800; }
+        .status-dot.saved   { background: #4CAF50; }
+        .status-dot.error   { background: #E24B4A; }
+
+        /* ── Summary bar ── */
+        .summary-bar { display: flex; gap: 12px; flex-wrap: wrap; margin-bottom: 16px; }
+        .summary-card { flex: 1; min-width: 110px; background: #f8f9fa; border-radius: 8px; padding: 12px 14px; }
+        .summary-card .lbl { font-size: 11px; color: #888; margin-bottom: 3px; }
+        .summary-card .val { font-size: 20px; font-weight: 500; color: #333; }
+
+        /* ── Toast ── */
+        .toast {
+            position: fixed; bottom: 24px; right: 24px; z-index: 9999;
+            background: #333; color: white; padding: 12px 20px;
+            border-radius: 10px; font-size: 13px; opacity: 0;
+            transition: opacity .3s; pointer-events: none;
+        }
+        .toast.show { opacity: 1; }
+        .toast.success { background: #2e7d32; }
+        .toast.error   { background: #c62828; }
+
+        /* ── Report card modal ── */
+        .report-modal { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.5); z-index: 1000; align-items: center; justify-content: center; padding: 20px; }
+        .report-modal.active { display: flex; }
+        .report-inner { background: white; border-radius: 12px; width: 100%; max-width: 620px; max-height: 88vh; overflow-y: auto; }
+        .report-header { padding: 18px 22px; border-bottom: 1px solid #eee; display: flex; justify-content: space-between; align-items: center; }
+        .report-header h2 { font-size: 16px; font-weight: 500; margin: 0; }
+        .close-report { background: none; border: none; font-size: 22px; cursor: pointer; color: #999; }
+        .report-body  { padding: 22px; }
+        .report-student-name { font-size: 20px; font-weight: 500; color: #333; margin-bottom: 4px; }
+        .report-meta { font-size: 13px; color: #888; margin-bottom: 20px; }
+        .report-table { width: 100%; border-collapse: collapse; font-size: 13px; margin-bottom: 16px; }
+        .report-table th { background: #f8f9fa; padding: 8px 10px; text-align: left; font-weight: 500; color: #555; border-bottom: 1px solid #eee; }
+        .report-table td { padding: 8px 10px; border-bottom: 1px solid #f5f5f5; }
+        .report-total { background: #667eea; color: white; border-radius: 8px; padding: 14px 18px; display: flex; justify-content: space-between; align-items: center; }
+        .report-total .big { font-size: 28px; font-weight: 600; }
+        .print-btn { width: 100%; margin-top: 14px; padding: 11px; background: #667eea; color: white; border: none; border-radius: 8px; cursor: pointer; font-size: 14px; font-weight: 500; }
+
+        /* ── Empty state ── */
+        .empty-state { text-align: center; padding: 3rem; color: #aaa; }
+        .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+
+        /* ── Responsive ── */
+        @media (max-width: 768px) {
+            .control-bar { gap: 8px; }
+            .marks-table { font-size: 12px; }
+            .mark-input  { width: 52px; font-size: 12px; }
+        }
+    </style>
+</head>
+<body>
+<div class="dashboard">
+
+    <!-- ==================== SIDEBAR ==================== -->
+    <aside class="sidebar">
+        <div class="sidebar-header">
+            <h2>🎓 RFID System</h2>
+            <p id="userName">Loading...</p>
+        </div>
+        <nav class="sidebar-nav" id="sidebarNav">
+            <p style="padding:15px;color:rgba(255,255,255,0.4);font-size:13px;">Loading...</p>
+        </nav>
+        <button class="logout-btn" id="logoutBtn">🚪 Logout</button>
+    </aside>
+
+    <!-- ==================== MAIN CONTENT ==================== -->
+    <main class="main-content">
+        <div class="top-bar">
+            <h1>📝 Marks Entry</h1>
+            <div class="top-bar-info"><span id="currentDate"></span></div>
+        </div>
+
+        <!-- Control bar -->
+        <div class="control-bar">
+            <select id="classSelect" style="min-width:120px;">
+                <option value="">— Select Class —</option>
+            </select>
+            <select id="examSelect" style="min-width:150px;">
+                <option value="midterm">Midterm Exam</option>
+                <option value="final">Final Exam</option>
+                <option value="unit1">Unit Test 1</option>
+                <option value="unit2">Unit Test 2</option>
+                <option value="assignment">Assignment</option>
+                <option value="practical">Practical</option>
+            </select>
+            <input type="text" id="subjectInput" placeholder="Subject (e.g. Maths)" style="min-width:150px;">
+            <button class="btn-green" onclick="addSubjectTab()">+ Add Subject</button>
+            <button class="btn-blue"  onclick="saveAllMarks()">💾 Save All</button>
+            <button class="btn-orange" onclick="exportCSV()">⬇ Export CSV</button>
+            <span class="save-status" id="saveStatus">
+                <span class="status-dot" id="statusDot"></span>
+                <span id="statusText"></span>
+            </span>
+        </div>
+
+        <!-- Subject tabs -->
+        <div class="subject-tabs" id="subjectTabs"></div>
+
+        <!-- Summary -->
+        <div class="summary-bar" id="summaryBar" style="display:none;"></div>
+
+        <!-- Main card -->
+        <div class="card" id="marksCard">
+            <div class="empty-state">
+                <div class="icon">📋</div>
+                <div>Select a class and add a subject to start entering marks</div>
+            </div>
+        </div>
+    </main>
+</div>
+
+<!-- ==================== REPORT CARD MODAL ==================== -->
+<div class="report-modal" id="reportModal">
+    <div class="report-inner">
+        <div class="report-header">
+            <h2>📄 Student Report Card</h2>
+            <button class="close-report" onclick="closeReport()">&times;</button>
+        </div>
+        <div class="report-body" id="reportBody"></div>
+    </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<script>
+// ── Auth ──────────────────────────────────────────────────────────────────────
+const SESSION = localStorage.getItem('sessionId');
+const USER    = JSON.parse(localStorage.getItem('user') || '{}');
+if (!SESSION) window.location.href = '/index.html';
+
+document.getElementById('userName').textContent    = USER.name || 'User';
+document.getElementById('currentDate').textContent = new Date().toLocaleDateString('en-IN', {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric'
+});
+
+// ── Sidebar ───────────────────────────────────────────────────────────────────
+(function buildSidebar() {
+    const nav = document.getElementById('sidebarNav');
+    const sep = () => '<div class="nav-sep"></div>';
+    const lbl = t => `<div class="nav-section-label">${t}</div>`;
+
+    if (USER.role === 'admin') {
+        nav.innerHTML = `
+            <a href="/admin-dashboard.html" class="nav-item" data-section="teachers">👥 Manage Teachers</a>
+            <a href="/admin-dashboard.html" class="nav-item" data-section="assignments">📚 Class Assignments</a>
+            <a href="/admin-dashboard.html" class="nav-item" data-section="students">👨‍🎓 Manage Students</a>
+            <a href="/admin-dashboard.html" class="nav-item" data-section="attendance">📊 Attendance Records</a>
+            ${sep()}
+            <a href="/analytics.html"  class="nav-item">🤖 ML Analytics</a>
+            <a href="/marks-entry.html" class="nav-item nav-item-marks">📝 Marks Entry</a>
+        `;
+    } else {
+        const asgn = JSON.parse(localStorage.getItem('assignments') || '{"ct":[],"st":[]}');
+        const rows = [
+            ...(asgn.ct || []).map(a => `<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;"><span style="color:rgba(255,255,255,.9);font-size:13px;">• ${a.class_name}</span><span style="background:#4CAF50;color:white;font-size:9px;padding:1px 6px;border-radius:4px;">CT</span></div>`),
+            ...(asgn.st || []).map(a => `<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;"><span style="color:rgba(255,255,255,.9);font-size:13px;">• ${a.class_name}</span><span style="background:#2196F3;color:white;font-size:9px;padding:1px 6px;border-radius:4px;">ST</span></div>`)
+        ].join('');
+        nav.innerHTML = `
+            ${lbl('Your Classes')}
+            <div style="padding:4px 15px 8px;">${rows || '<span style="color:rgba(255,255,255,.4);font-size:12px;">No assignments</span>'}</div>
+            ${sep()}
+            ${lbl('Navigation')}
+            <a href="/teacher-dashboard.html" class="nav-item">🏠 Dashboard</a>
+            <a href="/analytics.html"         class="nav-item">🤖 ML Analytics</a>
+            <a href="/marks-entry.html"       class="nav-item nav-item-marks">📝 Marks Entry</a>
+        `;
+    }
+
+    nav.querySelectorAll('[data-section]').forEach(link =>
+        link.addEventListener('click', () => sessionStorage.setItem('adminTab', link.dataset.section))
+    );
+})();
+
+document.getElementById('logoutBtn').addEventListener('click', async () => {
+    await fetch('/auth/logout', { method: 'POST', headers: { 'X-Session-Id': SESSION } });
+    localStorage.clear();
+    window.location.href = '/index.html';
+});
+
+// ── State ─────────────────────────────────────────────────────────────────────
+let students     = [];
+let subjects     = [];          // [{ name, exam, maxMark, marks: {studentId: value} }]
+let activeSubIdx = 0;
+let savedData    = {};          // snapshot for dirty-check
+
+// ── API helper ────────────────────────────────────────────────────────────────
+async function api(url, opts = {}) {
+    const r = await fetch(url, {
+        ...opts,
+        headers: { 'Content-Type': 'application/json', 'X-Session-Id': SESSION, ...(opts.headers || {}) }
+    });
+    if (r.status === 401) { localStorage.clear(); window.location.href = '/index.html'; return null; }
+    return r.json();
+}
+
+// ── Grade helper ──────────────────────────────────────────────────────────────
+function calcGrade(pct) {
+    if (pct >= 90) return 'A';
+    if (pct >= 75) return 'B';
+    if (pct >= 60) return 'C';
+    if (pct >= 45) return 'D';
+    return 'F';
+}
+function gradeCls(g) { return 'g-' + (g || ''); }
+
+// ── Init: load classes ─────────────────────────────────────────────────────────
+async function init() {
+    const data = await api('/api/marks/classes');
+    if (!data || !data.success) return;
+    const sel = document.getElementById('classSelect');
+    data.classes.forEach(c => sel.innerHTML += `<option value="${c}">${c}</option>`);
+
+    // Auto-select if teacher has only one CT class
+    if (USER.role !== 'admin') {
+        const asgn = JSON.parse(localStorage.getItem('assignments') || '{"ct":[]}');
+        if ((asgn.ct || []).length === 1) {
+            sel.value = asgn.ct[0].class_name;
+            loadClass();
+        }
+    }
+}
+
+// ── Load students for selected class ─────────────────────────────────────────
+async function loadClass() {
+    const cls = document.getElementById('classSelect').value;
+    if (!cls) return;
+
+    const data = await api(`/api/marks/students/${encodeURIComponent(cls)}`);
+    if (!data || !data.success) { showToast('Failed to load students', 'error'); return; }
+
+    students = data.students;
+    subjects = [];
+    activeSubIdx = 0;
+
+    // Load existing marks for this class
+    const existing = await api(`/api/marks/records/${encodeURIComponent(cls)}`);
+    if (existing && existing.success && existing.records.length) {
+        rebuildSubjectsFromRecords(existing.records);
+    }
+
+    renderSubjectTabs();
+    renderTable();
+}
+
+document.getElementById('classSelect').addEventListener('change', loadClass);
+
+// ── Rebuild subjects from DB records ─────────────────────────────────────────
+function rebuildSubjectsFromRecords(records) {
+    const map = {};
+    records.forEach(r => {
+        const key = r.subject + '|' + r.exam_type;
+        if (!map[key]) map[key] = { name: r.subject, exam: r.exam_type, maxMark: r.max_mark, marks: {} };
+        map[key].marks[r.student_id] = r.marks_obtained;
+    });
+    subjects = Object.values(map);
+}
+
+// ── Add subject tab ───────────────────────────────────────────────────────────
+function addSubjectTab() {
+    const name = document.getElementById('subjectInput').value.trim();
+    const exam = document.getElementById('examSelect').value;
+    const cls  = document.getElementById('classSelect').value;
+    if (!name) { showToast('Enter a subject name', 'error'); return; }
+    if (!cls)  { showToast('Select a class first', 'error'); return; }
+
+    // Avoid duplicate subject+exam combo
+    if (subjects.find(s => s.name === name && s.exam === exam)) {
+        showToast(`${name} (${exam}) already added`, 'error'); return;
+    }
+
+    subjects.push({ name, exam, maxMark: defaultMax(exam), marks: {} });
+    activeSubIdx = subjects.length - 1;
+    document.getElementById('subjectInput').value = '';
+    renderSubjectTabs();
+    renderTable();
+}
+
+function defaultMax(exam) {
+    const map = { midterm: 50, final: 100, unit1: 25, unit2: 25, assignment: 20, practical: 30 };
+    return map[exam] || 100;
+}
+
+function examLabel(e) {
+    const map = { midterm: 'Midterm', final: 'Final', unit1: 'Unit Test 1', unit2: 'Unit Test 2', assignment: 'Assignment', practical: 'Practical' };
+    return map[e] || e;
+}
+
+// ── Render tabs ───────────────────────────────────────────────────────────────
+function renderSubjectTabs() {
+    const el = document.getElementById('subjectTabs');
+    if (!subjects.length) { el.innerHTML = ''; return; }
+    el.innerHTML = subjects.map((s, i) => `
+        <div class="subject-tab ${i === activeSubIdx ? 'active' : ''}" onclick="switchSubject(${i})">
+            ${s.name} <span style="opacity:.7;font-size:10px;">${examLabel(s.exam)}</span>
+            <span onclick="event.stopPropagation();removeSubject(${i})" style="margin-left:6px;opacity:.6;cursor:pointer;">✕</span>
+        </div>
+    `).join('');
+}
+
+function switchSubject(i) { activeSubIdx = i; renderSubjectTabs(); renderTable(); }
+
+function removeSubject(i) {
+    if (!confirm(`Remove ${subjects[i].name} (${examLabel(subjects[i].exam)})?`)) return;
+    subjects.splice(i, 1);
+    activeSubIdx = Math.min(activeSubIdx, subjects.length - 1);
+    renderSubjectTabs();
+    renderTable();
+}
+
+// ── Render table ──────────────────────────────────────────────────────────────
+function renderTable() {
+    const card = document.getElementById('marksCard');
+    const sumBar = document.getElementById('summaryBar');
+
+    if (!students.length) {
+        card.innerHTML = '<div class="empty-state"><div class="icon">👨‍🎓</div><div>No students in this class</div></div>';
+        sumBar.style.display = 'none';
+        return;
+    }
+    if (!subjects.length) {
+        card.innerHTML = '<div class="empty-state"><div class="icon">📋</div><div>Add a subject tab above to start entering marks</div></div>';
+        sumBar.style.display = 'none';
+        return;
+    }
+
+    const sub = subjects[activeSubIdx];
+    const maxMark = sub.maxMark;
+    let entered = 0, total = 0, above75 = 0;
+
+    const rows = students.map(st => {
+        const val = sub.marks[st.id] !== undefined ? sub.marks[st.id] : '';
+        const pct  = val !== '' ? Math.round((val / maxMark) * 100) : null;
+        const grade = pct !== null ? calcGrade(pct) : '';
+        if (val !== '') { entered++; total += Number(val); }
+        if (pct !== null && pct >= 75) above75++;
+        const overCls = val !== '' && Number(val) > maxMark ? 'over' : (val !== '' ? 'good' : '');
+        return `
+        <tr>
+            <td class="left" style="font-weight:500;">${st.name}</td>
+            <td style="color:#888;font-size:12px;">${st.roll_number || '—'}</td>
+            <td style="text-align:center;">
+                <input type="number" min="0" max="${maxMark}" class="mark-input ${overCls}"
+                    value="${val}" placeholder="—"
+                    data-id="${st.id}" data-subidx="${activeSubIdx}"
+                    oninput="onMarkInput(this)"
+                    onchange="onMarkChange(this)">
+            </td>
+            <td style="text-align:center;">${maxMark}</td>
+            <td style="text-align:center;">${pct !== null ? pct + '%' : '—'}</td>
+            <td style="text-align:center;"><span class="grade-pill ${gradeCls(grade)}">${grade || '—'}</span></td>
+            <td style="text-align:center;">
+                <button onclick="showReport(${st.id})" style="padding:4px 10px;border:1px solid #e0e0e0;border-radius:6px;cursor:pointer;font-size:11px;background:white;color:#555;">Report</button>
+            </td>
+        </tr>`;
+    }).join('');
+
+    card.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+            <div>
+                <span style="font-weight:500;font-size:14px;">${sub.name}</span>
+                <span style="margin-left:8px;background:#667eea;color:white;font-size:11px;padding:2px 8px;border-radius:10px;">${examLabel(sub.exam)}</span>
+            </div>
+            <div style="display:flex;align-items:center;gap:10px;">
+                <label style="font-size:12px;color:#666;">Max marks:</label>
+                <input type="number" min="1" max="1000" value="${maxMark}"
+                    style="width:70px;padding:5px 8px;border:1px solid #e0e0e0;border-radius:6px;font-size:13px;"
+                    onchange="updateMaxMark(this.value)">
+            </div>
+        </div>
+        <div class="marks-table-wrap">
+        <table class="marks-table">
+            <thead><tr>
+                <th class="left" style="width:30%;">Student Name</th>
+                <th style="width:10%;">Roll</th>
+                <th style="width:12%;">Marks</th>
+                <th style="width:10%;">Out of</th>
+                <th style="width:10%;">%</th>
+                <th style="width:10%;">Grade</th>
+                <th style="width:10%;">Report</th>
+            </tr></thead>
+            <tbody>${rows}</tbody>
+        </table>
+        </div>
+    `;
+
+    // Summary bar
+    const avg = entered ? Math.round(total / entered) : 0;
+    const avgPct = entered ? Math.round((total / entered / maxMark) * 100) : 0;
+    sumBar.style.display = 'flex';
+    sumBar.innerHTML = `
+        ${sc('Total students', students.length)}
+        ${sc('Marks entered', entered)}
+        ${sc('Class avg', entered ? avg + '/' + maxMark : '—')}
+        ${sc('Avg %', entered ? avgPct + '%' : '—', avgPct >= 75 ? '#0F6E56' : avgPct >= 50 ? '#BA7517' : '#A32D2D')}
+        ${sc('Above 75%', above75, '#0F6E56')}
+        ${sc('Below 45%', students.filter(s => { const v = sub.marks[s.id]; return v !== undefined && v !== '' && (v/maxMark)*100 < 45; }).length, '#A32D2D')}
+    `;
+}
+
+function sc(lbl, val, col) {
+    return `<div class="summary-card"><div class="lbl">${lbl}</div><div class="val" style="color:${col || '#333'}">${val}</div></div>`;
+}
+
+// ── Input handlers ────────────────────────────────────────────────────────────
+function onMarkInput(input) {
+    const val  = input.value;
+    const max  = subjects[activeSubIdx].maxMark;
+    input.classList.toggle('over', val !== '' && Number(val) > max);
+    input.classList.toggle('good', val !== '' && Number(val) <= max);
+    // Live update grade in same row
+    const row = input.closest('tr');
+    const pct = val !== '' ? Math.round((Number(val) / max) * 100) : null;
+    const grade = pct !== null ? calcGrade(pct) : '';
+    row.cells[4].textContent = pct !== null ? pct + '%' : '—';
+    row.cells[5].innerHTML = `<span class="grade-pill ${gradeCls(grade)}">${grade || '—'}</span>`;
+    row.cells[2].textContent = max;
+}
+
+function onMarkChange(input) {
+    const id  = Number(input.dataset.id);
+    const idx = Number(input.dataset.subidx);
+    const val = input.value.trim();
+    if (val === '') { delete subjects[idx].marks[id]; }
+    else            { subjects[idx].marks[id] = Number(val); }
+    renderSummary();
+    setStatus('', '');
+}
+
+function renderSummary() {
+    const sumBar = document.getElementById('summaryBar');
+    if (!subjects.length || !students.length) { sumBar.style.display = 'none'; return; }
+    const sub = subjects[activeSubIdx];
+    const maxMark = sub.maxMark;
+    let entered = 0, total = 0, above75 = 0;
+    students.forEach(st => {
+        const v = sub.marks[st.id];
+        if (v !== undefined && v !== '') { entered++; total += Number(v); if ((Number(v)/maxMark)*100 >= 75) above75++; }
+    });
+    const avgPct = entered ? Math.round((total/entered/maxMark)*100) : 0;
+    sumBar.innerHTML = `
+        ${sc('Total students', students.length)}
+        ${sc('Marks entered', entered)}
+        ${sc('Class avg', entered ? Math.round(total/entered) + '/' + maxMark : '—')}
+        ${sc('Avg %', entered ? avgPct + '%' : '—', avgPct>=75?'#0F6E56':avgPct>=50?'#BA7517':'#A32D2D')}
+        ${sc('Above 75%', above75, '#0F6E56')}
+        ${sc('Below 45%', students.filter(s=>{ const v=sub.marks[s.id]; return v!==undefined&&v!==''&&(v/maxMark)*100<45; }).length, '#A32D2D')}
+    `;
+}
+
+function updateMaxMark(val) {
+    const v = parseInt(val);
+    if (!v || v < 1) return;
+    subjects[activeSubIdx].maxMark = v;
+    renderTable();
+}
+
+// ── Save all marks ────────────────────────────────────────────────────────────
+async function saveAllMarks() {
+    const cls = document.getElementById('classSelect').value;
+    if (!cls || !subjects.length) { showToast('Nothing to save', 'error'); return; }
+
+    setStatus('saving', 'Saving...');
+
+    const payload = [];
+    subjects.forEach(sub => {
+        students.forEach(st => {
+            const val = sub.marks[st.id];
+            if (val !== undefined && val !== '') {
+                payload.push({
+                    studentId: st.id,
+                    subject:   sub.name,
+                    examType:  sub.exam,
+                    maxMark:   sub.maxMark,
+                    marksObtained: Number(val),
+                    grade: calcGrade(Math.round((Number(val)/sub.maxMark)*100)),
+                    className: cls
+                });
+            }
+        });
+    });
+
+    if (!payload.length) { showToast('No marks entered yet', 'error'); setStatus('', ''); return; }
+
+    const result = await api('/api/marks/save', { method: 'POST', body: JSON.stringify({ records: payload }) });
+    if (result && result.success) {
+        setStatus('saved', `Saved ${result.saved} records`);
+        showToast(`✓ Saved ${result.saved} marks records`, 'success');
+    } else {
+        setStatus('error', 'Save failed');
+        showToast(result?.message || 'Save failed', 'error');
+    }
+}
+
+function setStatus(type, text) {
+    const dot  = document.getElementById('statusDot');
+    const txt  = document.getElementById('statusText');
+    dot.className  = 'status-dot' + (type ? ' ' + type : '');
+    txt.textContent = text;
+}
+
+// ── Export CSV ────────────────────────────────────────────────────────────────
+function exportCSV() {
+    if (!subjects.length || !students.length) { showToast('No data to export', 'error'); return; }
+    const cls = document.getElementById('classSelect').value;
+    const headers = ['Roll No', 'Name', ...subjects.map(s => `${s.name} (${examLabel(s.exam)}) /${s.maxMark}`)];
+    const rows = students.map(st => {
+        const cols = [st.roll_number || '', st.name];
+        subjects.forEach(sub => { cols.push(sub.marks[st.id] !== undefined ? sub.marks[st.id] : ''); });
+        return cols.map(c => `"${c}"`).join(',');
+    });
+    const csv = [headers.join(','), ...rows].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = `marks_${cls}_${Date.now()}.csv`;
+    a.click();
+}
+
+// ── Report card ───────────────────────────────────────────────────────────────
+async function showReport(studentId) {
+    const st = students.find(s => s.id === studentId);
+    if (!st) return;
+
+    const cls  = document.getElementById('classSelect').value;
+    const data = await api(`/api/marks/report/${studentId}?class=${encodeURIComponent(cls)}`);
+
+    let records = [];
+    if (data && data.success) records = data.records;
+
+    // Also include unsaved in-memory marks
+    subjects.forEach(sub => {
+        const val = sub.marks[studentId];
+        if (val !== undefined && val !== '') {
+            if (!records.find(r => r.subject === sub.name && r.exam_type === sub.exam)) {
+                records.push({ subject: sub.name, exam_type: sub.exam, marks_obtained: Number(val), max_mark: sub.maxMark, grade: calcGrade(Math.round((Number(val)/sub.maxMark)*100)) });
+            }
+        }
+    });
+
+    const totalObtained = records.reduce((a, r) => a + Number(r.marks_obtained), 0);
+    const totalMax      = records.reduce((a, r) => a + Number(r.max_mark), 0);
+    const overallPct    = totalMax ? Math.round((totalObtained / totalMax) * 100) : 0;
+    const overallGrade  = calcGrade(overallPct);
+
+    document.getElementById('reportBody').innerHTML = `
+        <div class="report-student-name">${st.name}</div>
+        <div class="report-meta">${cls} · Roll: ${st.roll_number || '—'} · Generated: ${new Date().toLocaleDateString('en-IN')}</div>
+        ${records.length ? `
+        <table class="report-table">
+            <thead><tr><th>Subject</th><th>Exam</th><th>Marks</th><th>Out of</th><th>%</th><th>Grade</th></tr></thead>
+            <tbody>
+            ${records.map(r => {
+                const pct = Math.round((r.marks_obtained / r.max_mark) * 100);
+                return `<tr>
+                    <td><strong>${r.subject}</strong></td>
+                    <td style="color:#888;">${examLabel(r.exam_type)}</td>
+                    <td style="text-align:center;font-weight:500;">${r.marks_obtained}</td>
+                    <td style="text-align:center;color:#888;">${r.max_mark}</td>
+                    <td style="text-align:center;">${pct}%</td>
+                    <td style="text-align:center;"><span class="grade-pill ${gradeCls(r.grade)}">${r.grade}</span></td>
+                </tr>`;
+            }).join('')}
+            </tbody>
+        </table>
+        <div class="report-total">
+            <div>
+                <div style="font-size:12px;opacity:.8;">Overall performance</div>
+                <div style="font-size:15px;margin-top:2px;">${totalObtained} / ${totalMax} marks</div>
+            </div>
+            <div style="text-align:right;">
+                <div class="big">${overallPct}%</div>
+                <div style="font-size:13px;opacity:.85;">Grade ${overallGrade}</div>
+            </div>
+        </div>` : '<div style="text-align:center;padding:2rem;color:#aaa;">No marks recorded for this student yet.</div>'}
+        <button class="print-btn" onclick="window.print()">🖨 Print Report Card</button>
+    `;
+    document.getElementById('reportModal').classList.add('active');
+}
+
+function closeReport() { document.getElementById('reportModal').classList.remove('active'); }
+document.getElementById('reportModal').addEventListener('click', e => { if (e.target === document.getElementById('reportModal')) closeReport(); });
+
+// ── Toast ─────────────────────────────────────────────────────────────────────
+function showToast(msg, type = '') {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.className = 'toast ' + type + ' show';
+    clearTimeout(t._timer);
+    t._timer = setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+// ── Boot ──────────────────────────────────────────────────────────────────────
+init();
+</script>
+</body>
+</html>

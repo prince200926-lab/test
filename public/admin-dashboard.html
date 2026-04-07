@@ -6,13 +6,11 @@
     <title>Admin Dashboard - RFID Attendance</title>
     <link rel="stylesheet" href="dashboard-style.css">
     <style>
-        /* Enhanced modal styles */
         .assignment-type-selector {
             display: flex;
             gap: 15px;
             margin: 20px 0;
         }
-        
         .assignment-type-card {
             flex: 1;
             padding: 20px;
@@ -21,29 +19,24 @@
             cursor: pointer;
             transition: all 0.3s;
         }
-        
         .assignment-type-card:hover {
             border-color: #2196F3;
             background: #f5f5f5;
         }
-        
         .assignment-type-card.selected {
             border-color: #2196F3;
             background: #e3f2fd;
         }
-        
         .assignment-type-card h3 {
             margin: 0 0 10px 0;
             color: #333;
             font-size: 18px;
         }
-        
         .assignment-type-card p {
             margin: 5px 0;
             color: #666;
             font-size: 14px;
         }
-        
         .assignment-type-card .badge-indicator {
             display: inline-block;
             padding: 4px 12px;
@@ -52,17 +45,8 @@
             font-weight: bold;
             margin-top: 10px;
         }
-        
-        .badge-ct {
-            background: #4CAF50;
-            color: white;
-        }
-        
-        .badge-st {
-            background: #2196F3;
-            color: white;
-        }
-        
+        .badge-ct { background: #4CAF50; color: white; }
+        .badge-st { background: #2196F3; color: white; }
         .info-box {
             background: #fff3cd;
             border-left: 4px solid #ffc107;
@@ -70,17 +54,8 @@
             margin: 15px 0;
             border-radius: 4px;
         }
-        
-        .info-box strong {
-            color: #856404;
-        }
-        
-        .btn-sm {
-            padding: 4px 8px;
-            font-size: 12px;
-            margin-left: 5px;
-        }
-
+        .info-box strong { color: #856404; }
+        .btn-sm { padding: 4px 8px; font-size: 12px; margin-left: 5px; }
         .simplified-note {
             background: #e8f5e9;
             border-left: 4px solid #4caf50;
@@ -88,61 +63,36 @@
             margin-bottom: 20px;
             border-radius: 4px;
         }
+        .btn-warning { background-color: #ff9800; color: white; }
+        .btn-warning:hover { background-color: #f57c00; }
 
-        .btn-warning {
-            background-color: #ff9800;
-            color: white;
+        /* Analytics nav item style */
+        .nav-item-analytics {
+            background: linear-gradient(135deg, rgba(255,255,255,0.15), rgba(255,255,255,0.05));
+            border-left: 3px solid rgba(255,255,255,0.6) !important;
         }
 
-        .btn-warning:hover {
-            background-color: #f57c00;
-        }
-
-        /* Mobile optimizations */
         @media (max-width: 768px) {
-            .assignment-type-selector {
-                flex-direction: column;
-            }
-
-            .assignment-type-card {
-                padding: 15px;
-            }
-
-            .assignment-type-card h3 {
-                font-size: 16px;
-            }
-
-            .assignment-type-card p {
-                font-size: 13px;
-            }
-
-            .btn-sm {
-                display: block;
-                width: 100%;
-                margin: 5px 0;
-            }
-
-            .data-table {
-                font-size: 13px;
-            }
-
-            .data-table th,
-            .data-table td {
-                padding: 6px 4px;
-                white-space: nowrap;
-            }
+            .assignment-type-selector { flex-direction: column; }
+            .assignment-type-card { padding: 15px; }
+            .assignment-type-card h3 { font-size: 16px; }
+            .assignment-type-card p { font-size: 13px; }
+            .btn-sm { display: block; width: 100%; margin: 5px 0; }
+            .data-table { font-size: 13px; }
+            .data-table th, .data-table td { padding: 6px 4px; white-space: nowrap; }
         }
     </style>
 </head>
 <body>
     <div class="dashboard">
-        <!-- Sidebar -->
+
+        <!-- ==================== SIDEBAR ==================== -->
         <aside class="sidebar">
             <div class="sidebar-header">
                 <h2>🎓 RFID System</h2>
                 <p id="userName">Admin</p>
             </div>
-            <a href="/analytics.html" class="nav-item">🤖 ML Analytics</a>
+
             <nav class="sidebar-nav">
                 <a href="#" class="nav-item active" data-tab="teachers">
                     👥 Manage Teachers
@@ -156,14 +106,18 @@
                 <a href="#" class="nav-item" data-tab="attendance">
                     📊 Attendance Records
                 </a>
+                <a href="/analytics.html" class="nav-item nav-item-analytics">
+                    🤖 ML Analytics
+                </a>
+                <a href="/marks-entry.html" class="nav-item">
+                    📝 Marks Entry
+                </a>
             </nav>
 
-            <button class="logout-btn" id="logoutBtn">
-                🚪 Logout
-            </button>
+            <button class="logout-btn" id="logoutBtn">🚪 Logout</button>
         </aside>
 
-        <!-- Main Content -->
+        <!-- ==================== MAIN CONTENT ==================== -->
         <main class="main-content">
             <div class="top-bar">
                 <h1 id="pageTitle">Manage Teachers</h1>
@@ -176,15 +130,11 @@
             <div class="tab-content active" id="teachers-tab">
                 <div class="content-header">
                     <h2>Teachers Management</h2>
-                    <button class="btn-primary" id="addTeacherBtn">
-                        ➕ Add New Teacher
-                    </button>
+                    <button class="btn-primary" id="addTeacherBtn">➕ Add New Teacher</button>
                 </div>
-
                 <div class="simplified-note">
                     <strong>📝 Workflow:</strong> First create teachers here, then go to "Class Assignments" to assign them as CT or ST of classes.
                 </div>
-
                 <div class="card">
                     <div id="teachersList" class="data-table-container">
                         <p class="loading">Loading teachers...</p>
@@ -196,15 +146,11 @@
             <div class="tab-content" id="assignments-tab">
                 <div class="content-header">
                     <h2>Class Assignments</h2>
-                    <button class="btn-primary" id="assignClassBtn">
-                        ➕ Assign Teacher to Class
-                    </button>
+                    <button class="btn-primary" id="assignClassBtn">➕ Assign Teacher to Class</button>
                 </div>
-
                 <div class="simplified-note">
                     <strong>💡 Tip:</strong> Assign teachers as <strong>CT (Class Teacher)</strong> of 1 class or <strong>ST (Subject Teacher)</strong> of multiple classes.
                 </div>
-
                 <div class="card">
                     <div id="assignmentsList" class="data-table-container">
                         <p class="loading">Loading assignments...</p>
@@ -216,11 +162,8 @@
             <div class="tab-content" id="students-tab">
                 <div class="content-header">
                     <h2>Students Management</h2>
-                    <button class="btn-primary" id="addStudentBtn">
-                        ➕ Register New Student
-                    </button>
+                    <button class="btn-primary" id="addStudentBtn">➕ Register New Student</button>
                 </div>
-
                 <div class="card">
                     <div id="studentsList" class="data-table-container">
                         <p class="loading">Loading students...</p>
@@ -232,16 +175,11 @@
             <div class="tab-content" id="attendance-tab">
                 <div class="content-header">
                     <h2>Attendance Records</h2>
-                    <div style="display: flex; gap: 10px; flex-wrap: wrap;">
-                        <button class="btn-secondary" id="refreshAttendanceBtn">
-                            🔄 Refresh
-                        </button>
-                        <button class="btn-danger" id="clearAttendanceBtn">
-                            🗑️ Clear All Records
-                        </button>
+                    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+                        <button class="btn-secondary" id="refreshAttendanceBtn">🔄 Refresh</button>
+                        <button class="btn-danger" id="clearAttendanceBtn">🗑️ Clear All Records</button>
                     </div>
                 </div>
-
                 <div class="stats-grid">
                     <div class="stat-card">
                         <h3>Total Records</h3>
@@ -256,11 +194,9 @@
                         <p class="stat-value" id="uniqueStudents">0</p>
                     </div>
                 </div>
-
-                <div style="background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
-                    <strong>⚠️ Warning:</strong> The "Clear All Records" button will permanently delete all attendance data. This action cannot be undone. Use with caution!
+                <div style="background:#fff3cd;border-left:4px solid #ffc107;padding:15px;border-radius:8px;margin-bottom:20px;">
+                    <strong>⚠️ Warning:</strong> The "Clear All Records" button will permanently delete all attendance data. This action cannot be undone.
                 </div>
-
                 <div class="card">
                     <div id="attendanceList" class="data-table-container">
                         <p class="loading">Loading attendance...</p>
@@ -270,7 +206,7 @@
         </main>
     </div>
 
-    <!-- Modal for Add Teacher -->
+    <!-- ==================== MODAL: Add Teacher ==================== -->
     <div class="modal" id="addTeacherModal">
         <div class="modal-content">
             <div class="modal-header">
@@ -278,7 +214,7 @@
                 <button class="close-modal">&times;</button>
             </div>
             <div class="simplified-note">
-                <strong>ℹ️ Note:</strong> All teachers are created with basic access. After creating, assign them as CT or ST of specific classes in the "Class Assignments" tab.
+                <strong>ℹ️ Note:</strong> After creating, assign teachers as CT or ST in the "Class Assignments" tab.
             </div>
             <form id="addTeacherForm">
                 <div class="form-group">
@@ -305,9 +241,9 @@
         </div>
     </div>
 
-    <!-- Modal for Assign Class -->
+    <!-- ==================== MODAL: Assign Class ==================== -->
     <div class="modal" id="assignClassModal">
-        <div class="modal-content" style="max-width: 600px;">
+        <div class="modal-content" style="max-width:600px;">
             <div class="modal-header">
                 <h2>Assign Teacher to Class</h2>
                 <button class="close-modal">&times;</button>
@@ -319,15 +255,11 @@
                         <option value="">-- Select Teacher --</option>
                     </select>
                 </div>
-                
                 <div class="form-group">
                     <label>Class Name *</label>
                     <input type="text" name="className" placeholder="e.g., 10-A, 9-B, 12-Science" required>
-                    <small style="color: #666; display: block; margin-top: 5px;">
-                        💡 Use consistent naming: 10-A, 10-B, 11-Science, etc.
-                    </small>
+                    <small style="color:#666;display:block;margin-top:5px;">💡 Use consistent naming: 10-A, 10-B, 11-Science, etc.</small>
                 </div>
-
                 <div class="form-group">
                     <label>Assignment Type *</label>
                     <div class="assignment-type-selector">
@@ -340,7 +272,6 @@
                             <p>✓ View all reports</p>
                             <div class="badge-indicator badge-ct">Main Teacher</div>
                         </div>
-                        
                         <div class="assignment-type-card" data-type="st">
                             <h3>📖 Subject Teacher</h3>
                             <p><strong>Limited Access:</strong></p>
@@ -353,12 +284,10 @@
                     </div>
                     <input type="hidden" name="isClassTeacher" id="isClassTeacherInput" value="false">
                 </div>
-
-                <div class="info-box" id="assignmentInfo" style="display: none;">
+                <div class="info-box" id="assignmentInfo" style="display:none;">
                     <strong>ℹ️ Important:</strong>
                     <p id="assignmentInfoText"></p>
                 </div>
-
                 <div class="modal-actions">
                     <button type="button" class="btn-secondary cancel-btn">Cancel</button>
                     <button type="submit" class="btn-primary" id="assignSubmitBtn">Assign Class</button>
@@ -367,7 +296,7 @@
         </div>
     </div>
 
-    <!-- Modal for Add Student -->
+    <!-- ==================== MODAL: Add Student ==================== -->
     <div class="modal" id="addStudentModal">
         <div class="modal-content">
             <div class="modal-header">
@@ -391,15 +320,11 @@
                     <label>Roll Number</label>
                     <input type="text" name="rollNumber" placeholder="e.g., 101">
                 </div>
-                
                 <div class="form-group">
                     <label>Password for Student App *</label>
                     <input type="password" name="password" required placeholder="Minimum 4 characters" minlength="4">
-                    <small style="color: #666; display: block; margin-top: 5px;">
-                        🔒 Students will use Card ID + this password to login to the mobile app
-                    </small>
+                    <small style="color:#666;display:block;margin-top:5px;">🔒 Students use Card ID + this password to login</small>
                 </div>
-                
                 <div class="modal-actions">
                     <button type="button" class="btn-secondary cancel-btn">Cancel</button>
                     <button type="submit" class="btn-primary">Register Student</button>
@@ -408,7 +333,7 @@
         </div>
     </div>
 
-    <!-- Modal for Edit Student -->
+    <!-- ==================== MODAL: Edit Student ==================== -->
     <div class="modal" id="editStudentModal">
         <div class="modal-content">
             <div class="modal-header">
@@ -418,38 +343,27 @@
             <div id="editStudentStats"></div>
             <form id="editStudentForm">
                 <input type="hidden" name="studentId" id="editStudentId">
-                
                 <div class="form-group">
                     <label>RFID Card ID *</label>
-                    <input type="text" name="cardId" id="editCardId" required placeholder="Card ID">
-                    <small style="color: #f44336; display: block; margin-top: 5px;">
-                        ⚠️ Changing card ID will reassign this student to a different card
-                    </small>
+                    <input type="text" name="cardId" id="editCardId" required>
+                    <small style="color:#f44336;display:block;margin-top:5px;">⚠️ Changing card ID reassigns this student to a different card</small>
                 </div>
-                
                 <div class="form-group">
                     <label>Student Name *</label>
-                    <input type="text" name="name" id="editName" required placeholder="e.g., Alice Johnson">
+                    <input type="text" name="name" id="editName" required>
                 </div>
-                
                 <div class="form-group">
                     <label>Class</label>
                     <input type="text" name="studentClass" id="editClass" placeholder="e.g., 10-A">
                 </div>
-                
                 <div class="form-group">
                     <label>Roll Number</label>
-                    <input type="text" name="rollNumber" id="editRollNumber" placeholder="e.g., 101">
+                    <input type="text" name="rollNumber" id="editRollNumber">
                 </div>
-                
                 <div class="form-group">
                     <label>New Password (Optional)</label>
-                    <input type="password" name="newPassword" id="editPassword" placeholder="Leave blank to keep current password" minlength="4">
-                    <small style="color: #666; display: block; margin-top: 5px;">
-                        💡 Only fill this if you want to change the student's password
-                    </small>
+                    <input type="password" name="newPassword" id="editPassword" placeholder="Leave blank to keep current" minlength="4">
                 </div>
-                
                 <div class="modal-actions">
                     <button type="button" class="btn-secondary cancel-btn">Cancel</button>
                     <button type="submit" class="btn-primary">💾 Save Changes</button>
@@ -458,45 +372,28 @@
         </div>
     </div>
 
-    <!-- Modal for Bulk Import Students -->
+    <!-- ==================== MODAL: Bulk Import ==================== -->
     <div class="modal" id="bulkImportModal">
-        <div class="modal-content" style="max-width: 700px;">
+        <div class="modal-content" style="max-width:700px;">
             <div class="modal-header">
                 <h2>📥 Bulk Import Students</h2>
                 <button class="close-modal">&times;</button>
             </div>
-            
-            <div style="background: #e3f2fd; padding: 15px; border-radius: 8px; margin-bottom: 20px;">
+            <div style="background:#e3f2fd;padding:15px;border-radius:8px;margin-bottom:20px;">
                 <strong>📝 CSV Format:</strong>
-                <pre style="background: white; padding: 10px; border-radius: 5px; margin-top: 10px; overflow-x: auto;">cardId,name,class,rollNumber
+                <pre style="background:white;padding:10px;border-radius:5px;margin-top:10px;overflow-x:auto;">cardId,name,class,rollNumber
 A1B2C3D4,John Doe,10-A,101
-E5F6G7H8,Jane Smith,10-B,102
-I9J0K1L2,Bob Wilson,11-A,201</pre>
-                <small style="color: #666;">
-                    💡 First line is header (optional). Each line = one student.<br>
-                    Required: cardId, name | Optional: class, rollNumber
-                </small>
+E5F6G7H8,Jane Smith,10-B,102</pre>
+                <small style="color:#666;">Required: cardId, name | Optional: class, rollNumber</small>
             </div>
-            
             <form id="bulkImportForm">
                 <div class="form-group">
                     <label>Paste CSV Data *</label>
-                    <textarea 
-                        name="csvData" 
-                        rows="10" 
-                        required 
-                        placeholder="Paste your CSV data here...
-Example:
-A1B2C3D4,John Doe,10-A,101
-E5F6G7H8,Jane Smith,10-B,102"
-                        style="width: 100%; padding: 12px; border: 2px solid #e0e0e0; border-radius: 8px; font-family: monospace; font-size: 13px;"
-                    ></textarea>
+                    <textarea name="csvData" rows="10" required placeholder="Paste your CSV data here..." style="width:100%;padding:12px;border:2px solid #e0e0e0;border-radius:8px;font-family:monospace;font-size:13px;"></textarea>
                 </div>
-                
-                <div style="background: #fff3cd; padding: 12px; border-radius: 8px; margin-bottom: 15px;">
-                    <strong>⚠️ Note:</strong> Duplicate card IDs will be skipped. The import will show how many succeeded and failed.
+                <div style="background:#fff3cd;padding:12px;border-radius:8px;margin-bottom:15px;">
+                    <strong>⚠️ Note:</strong> Duplicate card IDs will be skipped.
                 </div>
-                
                 <div class="modal-actions">
                     <button type="button" class="btn-secondary cancel-btn">Cancel</button>
                     <button type="submit" class="btn-primary">📥 Import Students</button>
@@ -517,24 +414,21 @@ E5F6G7H8,Jane Smith,10-B,102"
             card.addEventListener('click', () => {
                 assignmentCards.forEach(c => c.classList.remove('selected'));
                 card.classList.add('selected');
-                
                 const type = card.dataset.type;
-                
                 if (type === 'ct') {
                     isClassTeacherInput.value = '1';
                     assignmentInfo.style.display = 'block';
-                    assignmentInfoText.textContent = 'A teacher can only be Class Teacher of ONE class. If they already have a CT assignment, it must be removed first.';
+                    assignmentInfoText.textContent = 'A teacher can only be Class Teacher of ONE class.';
                     assignSubmitBtn.textContent = 'Assign as Class Teacher';
                 } else {
                     isClassTeacherInput.value = '0';
                     assignmentInfo.style.display = 'block';
-                    assignmentInfoText.textContent = 'A teacher can be Subject Teacher of MULTIPLE classes simultaneously.';
+                    assignmentInfoText.textContent = 'A teacher can be Subject Teacher of MULTIPLE classes.';
                     assignSubmitBtn.textContent = 'Assign as Subject Teacher';
                 }
             });
         });
 
-        // Auto-select ST by default
         document.querySelector('[data-type="st"]')?.click();
     </script>
     <script src="admin-dashboard.js"></script>

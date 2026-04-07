@@ -150,7 +150,8 @@ app.post('/auth/logout', auth.isAuthenticated, (req, res) => {
 
     res.json({
       success: true,
-      message: 'Logged out successfully'
+      message: 'Logged out successfully',
+      redirectTo: '/index.html'
     });
 
   } catch (error) {
@@ -160,6 +161,7 @@ app.post('/auth/logout', auth.isAuthenticated, (req, res) => {
       message: 'Internal server error'
     });
   }
+  
 });
 
 /**
@@ -1218,62 +1220,54 @@ app.get('/health', (req, res) => {
  * Attendance % = (days present / total school days recorded) × 100
  * Uses the attendance table to compute the real count per student.
  */
-app.get('/api/analytics/students', auth.isAuthenticated, (req, res) => {
+app.get('/api/analytics/students/v2', auth.isAuthenticated, (req, res) => {
   try {
     const students = database.students.getAll();
- 
-    // Get total distinct attendance days recorded in the system
-    const totalDaysStmt = database.db.prepare(`
-      SELECT COUNT(DISTINCT DATE(timestamp)) as total_days FROM attendance
-    `);
+
+    const totalDaysStmt = database.db.prepare(
+      `SELECT COUNT(DISTINCT DATE(timestamp)) as total_days FROM attendance`
+    );
     const { total_days } = totalDaysStmt.get();
     const denominator = total_days || 1;
- 
+
     const result = students.map(student => {
-      // Days this student was present
-      const presentStmt = database.db.prepare(`
-        SELECT COUNT(DISTINCT DATE(timestamp)) as present_days
-        FROM attendance
-        WHERE student_id = ?
-      `);
-      const { present_days } = presentStmt.get(student.id);
+      const { present_days } = database.db.prepare(
+        `SELECT COUNT(DISTINCT DATE(timestamp)) as present_days FROM attendance WHERE student_id = ?`
+      ).get(student.id);
+
       const attendance = Math.round((present_days / denominator) * 100);
- 
-      // Compute avg_score from grades columns if they exist, else default 0
-      const midterm    = student.midterm    || 0;
-      const final_score = student.final_score || 0;
-      const avg_score  = midterm && final_score ? Math.round((midterm + final_score) / 2) : 0;
- 
-      // Auto-compute grade from avg_score if not stored
-      let grade = student.grade || null;
-      if (!grade && avg_score) {
-        if (avg_score >= 90)      grade = 'A';
-        else if (avg_score >= 75) grade = 'B';
-        else if (avg_score >= 60) grade = 'C';
-        else if (avg_score >= 45) grade = 'D';
-        else                      grade = 'F';
-      }
- 
+
+      // Pull actual marks from marks table
+      const marksRow = database.db.prepare(`
+        SELECT
+          ROUND(AVG(CASE WHEN exam_type='midterm' THEN marks_obtained*100.0/max_mark END)) as midterm_pct,
+          ROUND(AVG(CASE WHEN exam_type='final'   THEN marks_obtained*100.0/max_mark END)) as final_pct,
+          ROUND(AVG(marks_obtained*100.0/max_mark))                                         as avg_score
+        FROM marks WHERE student_id = ?
+      `).get(student.id);
+
+      const avg_score = marksRow?.avg_score || 0;
+      let grade = null;
+      if (avg_score >= 90) grade = 'A';
+      else if (avg_score >= 75) grade = 'B';
+      else if (avg_score >= 60) grade = 'C';
+      else if (avg_score >= 45) grade = 'D';
+      else if (avg_score > 0)   grade = 'F';
+
       return {
-        id:           student.id,
-        name:         student.name,
-        class:        student.class,
-        roll_number:  student.roll_number,
-        card_id:      student.card_id,
-        attendance,
-        present_days,
-        total_days:   denominator,
-        midterm,
-        final_score,
-        avg_score,
-        grade,
+        id: student.id, name: student.name,
+        class: student.class, roll_number: student.roll_number,
+        attendance, present_days, total_days: denominator,
+        midterm: marksRow?.midterm_pct || 0,
+        final_score: marksRow?.final_pct || 0,
+        avg_score, grade
       };
     });
- 
+
     res.json({ success: true, count: result.length, data: result });
   } catch (error) {
-    console.error('Analytics students error:', error);
-    res.status(500).json({ success: false, message: 'Failed to fetch analytics data' });
+    console.error('Analytics v2 error:', error);
+    res.status(500).json({ success: false, message: 'Failed to fetch analytics' });
   }
 });
  
@@ -1373,6 +1367,289 @@ app.post('/api/analytics/ai-insight', auth.isAuthenticated, async (req, res) => 
     res.status(500).json({ success: false, message: 'AI request failed: ' + error.message });
   }
 });
+
+
+// ============================================================
+// MARKS ENTRY ROUTES
+// ============================================================
+
+// ── One-time table creation
+(function createMarksTable() {
+  database.db.exec(`
+    CREATE TABLE IF NOT EXISTS marks (
+      id             INTEGER PRIMARY KEY AUTOINCREMENT,
+      student_id     INTEGER NOT NULL,
+      class          TEXT NOT NULL,
+      subject        TEXT NOT NULL,
+      exam_type      TEXT NOT NULL,
+      marks_obtained REAL NOT NULL,
+      max_mark       REAL NOT NULL DEFAULT 100,
+      grade          TEXT,
+      entered_by     INTEGER,
+      created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+      updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+      FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
+      UNIQUE(student_id, subject, exam_type)
+    )
+  `);
+
+  // Add indexes
+  database.db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_marks_student ON marks(student_id);
+    CREATE INDEX IF NOT EXISTS idx_marks_class   ON marks(class);
+    CREATE INDEX IF NOT EXISTS idx_marks_subject ON marks(subject, exam_type);
+  `);
+
+  console.log('✓ Marks table ready');
+})();
+
+// ── Prepared statements ───────────────────────────────────────────────────────
+const upsertMark = database.db.prepare(`
+  INSERT INTO marks (student_id, class, subject, exam_type, marks_obtained, max_mark, grade, entered_by)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  ON CONFLICT(student_id, subject, exam_type)
+  DO UPDATE SET
+    marks_obtained = excluded.marks_obtained,
+    max_mark       = excluded.max_mark,
+    grade          = excluded.grade,
+    entered_by     = excluded.entered_by,
+    updated_at     = CURRENT_TIMESTAMP
+`);
+
+const getMarksByClass = database.db.prepare(`
+  SELECT m.*, s.name as student_name, s.roll_number
+  FROM marks m
+  JOIN students s ON m.student_id = s.id
+  WHERE m.class = ?
+  ORDER BY s.roll_number, m.subject, m.exam_type
+`);
+
+const getMarksByStudent = database.db.prepare(`
+  SELECT m.*, s.name as student_name, s.roll_number
+  FROM marks m
+  JOIN students s ON m.student_id = s.id
+  WHERE m.student_id = ? AND m.class = ?
+  ORDER BY m.subject, m.exam_type
+`);
+
+const deleteMarkRecord = database.db.prepare(`
+  DELETE FROM marks WHERE student_id = ? AND subject = ? AND exam_type = ?
+`);
+
+// ── GET /api/marks/classes ────────────────────────────────────────────────────
+// Returns list of distinct classes the current user can access
+app.get('/api/marks/classes', auth.isAuthenticated, (req, res) => {
+  try {
+    let classes = [];
+
+    if (req.user.role === 'admin') {
+      // Admin sees all classes
+      const rows = database.db.prepare(`SELECT DISTINCT class FROM students WHERE class IS NOT NULL ORDER BY class`).all();
+      classes = rows.map(r => r.class);
+    } else {
+      // Teacher sees only their assigned classes
+      const assignments = database.teacherClasses.getByTeacher(req.user.id);
+      classes = assignments.map(a => a.class_name).sort();
+    }
+
+    res.json({ success: true, classes });
+  } catch (error) {
+    console.error('Get classes error:', error);
+    res.status(500).json({ success: false, message: 'Failed to get classes' });
+  }
+});
+
+// ── GET /api/marks/students/:class ───────────────────────────────────────────
+// Returns students in a class (teacher must have access)
+app.get('/api/marks/students/:className', auth.isAuthenticated, (req, res) => {
+  try {
+    const { className } = req.params;
+
+    // Access check
+    if (req.user.role !== 'admin') {
+      const assignments = database.teacherClasses.getByTeacher(req.user.id);
+      const hasAccess   = assignments.some(a => a.class_name === className);
+      if (!hasAccess) {
+        return res.status(403).json({ success: false, message: 'No access to this class' });
+      }
+    }
+
+    const students = database.students.getByClass(className);
+    res.json({ success: true, students });
+  } catch (error) {
+    console.error('Get students error:', error);
+    res.status(500).json({ success: false, message: 'Failed to get students' });
+  }
+});
+
+// ── GET /api/marks/records/:class ────────────────────────────────────────────
+// Returns all mark records for a class
+app.get('/api/marks/records/:className', auth.isAuthenticated, (req, res) => {
+  try {
+    const { className } = req.params;
+
+    if (req.user.role !== 'admin') {
+      const assignments = database.teacherClasses.getByTeacher(req.user.id);
+      if (!assignments.some(a => a.class_name === className)) {
+        return res.status(403).json({ success: false, message: 'No access to this class' });
+      }
+    }
+
+    const records = getMarksByClass.all(className);
+    res.json({ success: true, records });
+  } catch (error) {
+    console.error('Get records error:', error);
+    res.status(500).json({ success: false, message: 'Failed to get records' });
+  }
+});
+
+// ── GET /api/marks/report/:studentId ─────────────────────────────────────────
+// Returns all marks for a single student (for report card)
+app.get('/api/marks/report/:studentId', auth.isAuthenticated, (req, res) => {
+  try {
+    const studentId = parseInt(req.params.studentId);
+    const className = req.query.class;
+
+    if (!className) {
+      return res.status(400).json({ success: false, message: 'class query param required' });
+    }
+
+    if (req.user.role !== 'admin') {
+      const assignments = database.teacherClasses.getByTeacher(req.user.id);
+      if (!assignments.some(a => a.class_name === className)) {
+        return res.status(403).json({ success: false, message: 'No access to this class' });
+      }
+    }
+
+    const records = getMarksByStudent.all(studentId, className);
+    res.json({ success: true, records });
+  } catch (error) {
+    console.error('Get report error:', error);
+    res.status(500).json({ success: false, message: 'Failed to get report' });
+  }
+});
+
+// ── POST /api/marks/save ─────────────────────────────────────────────────────
+// Bulk upsert marks. Body: { records: [{studentId, subject, examType, maxMark, marksObtained, grade, className}] }
+app.post('/api/marks/save', auth.isAuthenticated, (req, res) => {
+  try {
+    const { records } = req.body;
+
+    if (!Array.isArray(records) || !records.length) {
+      return res.status(400).json({ success: false, message: 'records array required' });
+    }
+
+    // Access check on first record's class
+    const className = records[0].className;
+    if (req.user.role !== 'admin') {
+      const assignments = database.teacherClasses.getByTeacher(req.user.id);
+      if (!assignments.some(a => a.class_name === className)) {
+        return res.status(403).json({ success: false, message: 'No access to this class' });
+      }
+    }
+
+    let saved = 0;
+    const doAll = database.db.transaction(() => {
+      records.forEach(r => {
+        upsertMark.run(
+          r.studentId,
+          r.className,
+          r.subject,
+          r.examType,
+          r.marksObtained,
+          r.maxMark || 100,
+          r.grade || null,
+          req.user.id
+        );
+        saved++;
+      });
+    });
+    doAll();
+
+    console.log(`✓ Marks saved: ${saved} records by ${req.user.username}`);
+    res.json({ success: true, saved });
+  } catch (error) {
+    console.error('Save marks error:', error);
+    res.status(500).json({ success: false, message: 'Failed to save marks: ' + error.message });
+  }
+});
+
+// ── DELETE /api/marks/record ──────────────────────────────────────────────────
+// Delete a single mark record
+// Body: { studentId, subject, examType }
+app.delete('/api/marks/record', auth.isAuthenticated, (req, res) => {
+  try {
+    const { studentId, subject, examType } = req.body;
+    if (!studentId || !subject || !examType) {
+      return res.status(400).json({ success: false, message: 'studentId, subject, examType required' });
+    }
+
+    if (req.user.role !== 'admin') {
+      return res.status(403).json({ success: false, message: 'Admin only' });
+    }
+
+    const result = deleteMarkRecord.run(studentId, subject, examType);
+    res.json({ success: true, deleted: result.changes });
+  } catch (error) {
+    console.error('Delete mark error:', error);
+    res.status(500).json({ success: false, message: 'Failed to delete mark' });
+  }
+});
+
+// ── GET /api/marks/summary ────────────────────────────────────────────────────
+// Class-level summary for analytics (used by /analytics.html)
+app.get('/api/marks/summary/:className', auth.isAuthenticated, (req, res) => {
+  try {
+    const { className } = req.params;
+
+    const stmt = database.db.prepare(`
+      SELECT
+        s.id, s.name, s.roll_number,
+        AVG(CASE WHEN m.exam_type = 'midterm' THEN (m.marks_obtained * 100.0 / m.max_mark) END) as midterm_pct,
+        AVG(CASE WHEN m.exam_type = 'final'   THEN (m.marks_obtained * 100.0 / m.max_mark) END) as final_pct,
+        AVG(m.marks_obtained * 100.0 / m.max_mark) as overall_pct,
+        COUNT(m.id) as subjects_entered
+      FROM students s
+      LEFT JOIN marks m ON m.student_id = s.id AND m.class = ?
+      WHERE s.class = ?
+      GROUP BY s.id
+      ORDER BY s.roll_number
+    `);
+
+    const summary = stmt.all(className, className);
+    res.json({ success: true, summary });
+  } catch (error) {
+    console.error('Summary error:', error);
+    res.status(500).json({ success: false, message: 'Failed to get summary' });
+  }
+});
+
+// ── GET /api/marks/leaderboard/:class ────────────────────────────────────────
+// Top performers in a class
+app.get('/api/marks/leaderboard/:className', auth.isAuthenticated, (req, res) => {
+  try {
+    const { className } = req.params;
+    const stmt = database.db.prepare(`
+      SELECT s.name, s.roll_number,
+        ROUND(AVG(m.marks_obtained * 100.0 / m.max_mark), 1) as avg_pct,
+        COUNT(m.id) as subjects
+      FROM students s
+      JOIN marks m ON m.student_id = s.id AND m.class = ?
+      WHERE s.class = ?
+      GROUP BY s.id
+      HAVING subjects > 0
+      ORDER BY avg_pct DESC
+      LIMIT 10
+    `);
+    const leaderboard = stmt.all(className, className);
+    res.json({ success: true, leaderboard });
+  } catch (error) {
+    console.error('Leaderboard error:', error);
+    res.status(500).json({ success: false, message: 'Failed to get leaderboard' });
+  }
+});
+// ────────────────────────────────────────────────────────────────────
+
 
 // ==========================================
 // START SERVER

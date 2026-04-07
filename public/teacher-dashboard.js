@@ -53,7 +53,7 @@ let currentUser = JSON.parse(localStorage.getItem('user') || '{}');
 let assignments = JSON.parse(localStorage.getItem('assignments') || '{"ct":[],"st":[]}');
 
 if (!sessionId || !currentUser.id) {
-    window.location.href = '/login.html';
+    window.location.href = '/index.html';
 }
 
 if (currentUser.role === 'admin') {
@@ -99,7 +99,7 @@ async function apiCall(endpoint, options = {}) {
 
         if (response.status === 401) {
             localStorage.clear();
-            window.location.href = '/login.html';
+            window.location.href = '/index.html';
             return null;
         }
 
@@ -442,7 +442,7 @@ function handleSTClassChange(className) {
 logoutBtn.addEventListener('click', async () => {
     await apiCall('/auth/logout', { method: 'POST' });
     localStorage.clear();
-    window.location.href = '/login.html';
+    window.location.href = '/index.html';
 });
 
 // ==========================================
