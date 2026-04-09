@@ -360,9 +360,10 @@
 
 <script>
 // ── Auth ──────────────────────────────────────────────────────────────────────
-const SESSION = localStorage.getItem('sessionId');
+// Session is now stored in httpOnly cookie (secure, not accessible to XSS)
+// Only non-sensitive user info is stored in localStorage
 const USER    = JSON.parse(localStorage.getItem('user') || '{}');
-if (!SESSION) { window.location.href = '/index.html'; }
+if (!USER.name) { window.location.href = '/index.html'; }
 
 document.getElementById('userName').textContent    = USER.name || 'User';
 document.getElementById('currentDate').textContent = new Date().toLocaleDateString('en-IN', {
@@ -462,7 +463,7 @@ function canView(baseClass, section) {
 })();
 
 document.getElementById('logoutBtn').addEventListener('click', async () => {
-    await fetch('/auth/logout', { method: 'POST', headers: { 'X-Session-Id': SESSION } });
+    await fetch('/auth/logout', { method: 'POST', credentials: 'include' });
     localStorage.clear();
     window.location.href = '/index.html';
 });
@@ -594,7 +595,8 @@ function getAvailableSections(baseClass) {
 async function api(url, opts = {}) {
     const r = await fetch(url, {
         ...opts,
-        headers: { 'Content-Type': 'application/json', 'X-Session-Id': SESSION, ...(opts.headers || {}) }
+        credentials: 'include', // Sends httpOnly cookies automatically
+        headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) }
     });
     if (r.status === 401) { localStorage.clear(); window.location.href = '/index.html'; return null; }
     return r.json();

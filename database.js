@@ -10,9 +10,19 @@ const bcrypt = require('bcryptjs');
 
 // Create/open database file
 const dbPath = path.join(__dirname, 'attendance.db');
-const db = new Database(dbPath);
+let db;
 
-console.log('✓ Database connected:', dbPath);
+try {
+  db = new Database(dbPath);
+  console.log('✓ Database connected:', dbPath);
+} catch (error) {
+  console.error('✗ Database connection failed:', error.message);
+  console.error('Please check:');
+  console.error('  1. The disk has enough space');
+  console.error('  2. You have write permissions for:', dbPath);
+  console.error('  3. The database file is not corrupted');
+  process.exit(1);
+}
 
 // Enable foreign keys
 db.pragma('foreign_keys = ON');
@@ -457,6 +467,11 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_marks_class   ON marks(class);
   CREATE INDEX IF NOT EXISTS idx_marks_section ON marks(section);
   CREATE INDEX IF NOT EXISTS idx_marks_subject ON marks(subject, exam_type);
+  CREATE INDEX IF NOT EXISTS idx_marks_student_class ON marks(student_id, class);
+  CREATE INDEX IF NOT EXISTS idx_attendance_student_date ON attendance(student_id, timestamp);
+  CREATE INDEX IF NOT EXISTS idx_attendance_class_date ON attendance(class, timestamp);
+  CREATE INDEX IF NOT EXISTS idx_students_class_section ON students(class, section);
+  CREATE INDEX IF NOT EXISTS idx_students_roll ON students(roll_number);
 `);
 
 console.log('✓ Marks table ready');

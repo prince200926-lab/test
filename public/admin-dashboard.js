@@ -64,10 +64,11 @@
 // ==========================================
 // SESSION AND AUTH
 // ==========================================
-let sessionId = localStorage.getItem('sessionId');
+// Session is now stored in httpOnly cookie (secure, not accessible to XSS)
+// Only non-sensitive user info is stored in localStorage
 let currentUser = JSON.parse(localStorage.getItem('user') || '{}');
 
-if (!sessionId || currentUser.role !== 'admin') {
+if (!currentUser.role || currentUser.role !== 'admin') {
     window.location.href = '/index.html';
 }
 
@@ -145,15 +146,14 @@ async function apiCall(endpoint, options = {}) {
     try {
         const response = await fetch(endpoint, {
             ...options,
+            credentials: 'include', // Sends httpOnly cookies automatically
             headers: {
                 'Content-Type': 'application/json',
-                'X-Session-Id': sessionId,
                 ...options.headers
             }
         });
 
         if (response.status === 401) {
-            localStorage.removeItem('sessionId');
             localStorage.removeItem('user');
             window.location.href = '/index.html';
             return null;
@@ -980,7 +980,6 @@ refreshAttendanceBtn.addEventListener('click', loadAttendance);
 // ==========================================
 logoutBtn.addEventListener('click', async () => {
     await apiCall('/auth/logout', { method: 'POST' });
-    localStorage.removeItem('sessionId');
     localStorage.removeItem('user');
     window.location.href = '/index.html';
 });

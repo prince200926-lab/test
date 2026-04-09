@@ -5,23 +5,52 @@ const path = require('path');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
+const fetch = require('node-fetch');
 const database = require('./database');
 const auth = require('./auth-middleware');
+
+// Async handler wrapper for Express to catch async errors
+const asyncHandler = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
 
 // Create Express application
 const app = express();
 const PORT = process.env.PORT || 8080;
 
 // ==========================================
-// RATE LIMITING (In-memory store)
+// RATE LIMITING (In-memory store with LRU eviction)
 // ==========================================
 const rateLimits = new Map();
 const RATE_LIMIT_WINDOW = 60000; // 1 minute
 const RATE_LIMIT_MAX = 100; // requests per window
+const RATE_LIMIT_MAP_MAX_SIZE = 10000; // Maximum entries to prevent memory leak
 
 function rateLimitMiddleware(req, res, next) {
   const ip = req.ip || req.connection.remoteAddress;
   const now = Date.now();
+
+  // Evict oldest entries if map is too large (LRU approximation)
+  if (rateLimits.size >= RATE_LIMIT_MAP_MAX_SIZE) {
+    const entriesToDelete = Math.floor(RATE_LIMIT_MAP_MAX_SIZE * 0.1); // Delete 10% of oldest
+    let deleted = 0;
+    for (const [key, value] of rateLimits.entries()) {
+      if (deleted >= entriesToDelete) break;
+      if (now > value.resetTime) {
+        rateLimits.delete(key);
+        deleted++;
+      }
+    }
+    // If still too large, delete oldest entries by insertion order
+    if (rateLimits.size >= RATE_LIMIT_MAP_MAX_SIZE) {
+      let count = 0;
+      for (const key of rateLimits.keys()) {
+        if (count >= entriesToDelete) break;
+        rateLimits.delete(key);
+        count++;
+      }
+    }
+  }
 
   if (!rateLimits.has(ip)) {
     rateLimits.set(ip, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
@@ -50,10 +79,14 @@ function rateLimitMiddleware(req, res, next) {
 // Clean up expired rate limit entries periodically
 setInterval(() => {
   const now = Date.now();
+  const expired = [];
   for (const [ip, limit] of rateLimits.entries()) {
     if (now > limit.resetTime) {
-      rateLimits.delete(ip);
+      expired.push(ip);
     }
+  }
+  for (const ip of expired) {
+    rateLimits.delete(ip);
   }
 }, RATE_LIMIT_WINDOW);
 
@@ -624,6 +657,14 @@ app.post('/api/rfid/scan', rateLimitMiddleware, (req, res) => {
       });
     }
 
+    // Validate minimum length (3 characters)
+    if (cardId.trim().length < 3) {
+      return res.status(400).json({
+        success: false,
+        message: 'cardId must be at least 3 characters long'
+      });
+    }
+
     // Sanitize cardId: remove whitespace, limit length, uppercase
     const timestamp = new Date().toISOString();
     const trimmedCardId = cardId.trim().toUpperCase().slice(0, 50);
@@ -944,6 +985,22 @@ app.post('/students/register', auth.isAuthenticated, auth.isClassTeacher, (req, 
       return res.status(400).json({
         success: false,
         message: 'cardId and name are required'
+      });
+    }
+
+    // Validate name length (BUG-017 fix)
+    if (name.length > 200) {
+      return res.status(400).json({
+        success: false,
+        message: 'Name must be less than 200 characters'
+      });
+    }
+
+    // Validate cardId length
+    if (cardId.length > 100) {
+      return res.status(400).json({
+        success: false,
+        message: 'Card ID must be less than 100 characters'
       });
     }
 
@@ -1299,6 +1356,16 @@ app.post('/admin/students/bulk-import', auth.isAuthenticated, auth.isAdmin, (req
 
     students.forEach((student, index) => {
       try {
+        // Validate student is an object
+        if (!student || typeof student !== 'object') {
+          results.failed++;
+          results.errors.push({
+            row: index + 1,
+            error: 'Invalid student data - must be an object'
+          });
+          return;
+        }
+
         const { cardId, name, studentClass, section, rollNumber } = student;
 
         if (!cardId || !name) {
@@ -1414,14 +1481,16 @@ app.get('/api/analytics/students/v2', auth.isAuthenticated, (req, res) => {
       `SELECT COUNT(DISTINCT DATE(timestamp)) as total_days FROM attendance`
     );
     const { total_days } = totalDaysStmt.get();
-    const denominator = total_days || 1;
 
     const result = students.map(student => {
       const { present_days } = database.db.prepare(
         `SELECT COUNT(DISTINCT DATE(timestamp)) as present_days FROM attendance WHERE student_id = ?`
       ).get(student.id);
 
-      const attendance = Math.round((present_days / denominator) * 100);
+      // Calculate attendance only if there are school days recorded
+      const attendance = total_days > 0
+        ? Math.round((present_days / total_days) * 100)
+        : 0; // No school days recorded = 0% attendance
 
       // Pull actual marks from marks table
       const marksRow = database.db.prepare(`
@@ -1443,7 +1512,7 @@ app.get('/api/analytics/students/v2', auth.isAuthenticated, (req, res) => {
       return {
         id: student.id, name: student.name,
         class: student.class, roll_number: student.roll_number,
-        attendance, present_days, total_days: denominator,
+        attendance, present_days, total_days,
         midterm: marksRow?.midterm_pct || 0,
         final_score: marksRow?.final_pct || 0,
         avg_score, grade
@@ -1510,10 +1579,9 @@ app.post('/api/analytics/import-grades', auth.isAuthenticated, auth.isAdmin, (re
  *   Get yours free at: https://aistudio.google.com/app/apikey
  *   Set it with: export GEMINI_API_KEY=your-key-here
  */
-app.post('/api/analytics/ai-insight', auth.isAuthenticated, async (req, res) => {
-  try {
-    const { summary } = req.body;
-    if (!summary) return res.status(400).json({ success: false, message: 'summary required' });
+app.post('/api/analytics/ai-insight', auth.isAuthenticated, asyncHandler(async (req, res) => {
+  const { summary } = req.body;
+  if (!summary) return res.status(400).json({ success: false, message: 'summary required' });
 
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
@@ -1551,13 +1619,9 @@ app.post('/api/analytics/ai-insight', auth.isAuthenticated, async (req, res) => 
     }
 
     // Extract text from Gemini response
-    const insight = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response from AI';
-    res.json({ success: true, insight });
-  } catch (error) {
-    console.error('AI insight error:', error);
-    res.status(500).json({ success: false, message: 'AI request failed: ' + error.message });
-  }
-});
+  const insight = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response from AI';
+  res.json({ success: true, insight });
+}));
 
 
 // ============================================================
@@ -1736,6 +1800,49 @@ app.post('/api/marks/save', auth.isAuthenticated, (req, res) => {
       return res.status(400).json({ success: false, message: 'records array required' });
     }
 
+    // Validate all records before processing
+    const validExamTypes = ['midterm', 'final', 'quiz', 'assignment', 'test'];
+    for (const r of records) {
+      // Validate exam_type
+      if (r.examType && !validExamTypes.includes(r.examType)) {
+        return res.status(400).json({
+          success: false,
+          message: `Invalid exam_type: ${r.examType}. Must be one of: ${validExamTypes.join(', ')}`
+        });
+      }
+
+      // Validate marks_obtained is not negative and not exceeding maxMark
+      if (typeof r.marksObtained !== 'number' || r.marksObtained < 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'marksObtained must be a non-negative number'
+        });
+      }
+
+      if (r.marksObtained > (r.maxMark || 100)) {
+        return res.status(400).json({
+          success: false,
+          message: `marksObtained (${r.marksObtained}) cannot exceed maxMark (${r.maxMark || 100})`
+        });
+      }
+
+      // Validate studentId is a positive integer
+      if (!Number.isInteger(r.studentId) || r.studentId <= 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'studentId must be a positive integer'
+        });
+      }
+
+      // Validate subject has reasonable length
+      if (!r.subject || r.subject.length > 100) {
+        return res.status(400).json({
+          success: false,
+          message: 'subject is required and must be less than 100 characters'
+        });
+      }
+    }
+
     // Access check on first record's class
     const className = records[0].className;
     const section = records[0].section;
@@ -1908,6 +2015,17 @@ app.get('/api/marks/leaderboard/:className', auth.isAuthenticated, (req, res) =>
 // START SERVER
 // ==========================================
 
+// Global error handler - catches errors from async routes
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  res.status(500).json({
+    success: false,
+    message: process.env.NODE_ENV === 'production'
+      ? 'Internal server error'
+      : err.message
+  });
+});
+
 app.listen(PORT, () => {
   console.log('=================================');
   console.log('🎓 RFID Attendance System Started');
@@ -1927,4 +2045,24 @@ process.on('SIGINT', () => {
   database.db.close();
   console.log('✓ Database connection closed');
   process.exit(0);
+});
+
+// Handle SIGTERM for graceful shutdown (BUG-011)
+process.on('SIGTERM', () => {
+  console.log('\n\nSIGTERM received, shutting down gracefully...');
+  database.db.close();
+  console.log('✓ Database connection closed');
+  process.exit(0);
+});
+
+// Handle uncaught exceptions (BUG-011)
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+  database.db.close();
+  process.exit(1);
+});
+
+// Handle unhandled promise rejections (BUG-011)
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });

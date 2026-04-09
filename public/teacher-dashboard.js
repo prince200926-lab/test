@@ -48,11 +48,12 @@
 // ==========================================
 // SESSION AND AUTH
 // ==========================================
-let sessionId = localStorage.getItem('sessionId');
+// Session is now stored in httpOnly cookie (secure, not accessible to XSS)
+// Only non-sensitive user info is stored in localStorage
 let currentUser = JSON.parse(localStorage.getItem('user') || '{}');
 let assignments = JSON.parse(localStorage.getItem('assignments') || '{"ct":[],"st":[]}');
 
-if (!sessionId || !currentUser.id) {
+if (!currentUser.id) {
     window.location.href = '/index.html';
 }
 
@@ -83,6 +84,11 @@ currentDate.textContent = new Date().toLocaleDateString('en-US', {
 let selectedCTClass = null;
 let selectedSTClass = null;
 
+// Store full assignment object for current selection
+// BUG FIX: Moved declarations here before they are used in initDashboard
+let selectedCTAssignment = null;
+let selectedSTAssignment = null;
+
 // ==========================================
 // API HELPER
 // ==========================================
@@ -90,9 +96,9 @@ async function apiCall(endpoint, options = {}) {
     try {
         const response = await fetch(endpoint, {
             ...options,
+            credentials: 'include', // Sends httpOnly cookies automatically
             headers: {
                 'Content-Type': 'application/json',
-                'X-Session-Id': sessionId,
                 ...options.headers
             }
         });
@@ -186,8 +192,7 @@ function updateSidebar() {
 // ==========================================
 // CLASS TEACHER SECTION - Adapted for new class/section model
 // ==========================================
-// Store full assignment object for current selection
-let selectedCTAssignment = null;
+// selectedCTAssignment declared earlier to avoid hoisting issues
 
 async function initCTSection() {
     let html = '';
@@ -408,8 +413,7 @@ function showAddStudentModal() {
 // ==========================================
 // SUBJECT TEACHER SECTION - Adapted for new class/section model
 // ==========================================
-// Store full assignment object for ST selection
-let selectedSTAssignment = null;
+// selectedSTAssignment declared earlier to avoid hoisting issues
 
 async function initSTSection() {
     let html = '';

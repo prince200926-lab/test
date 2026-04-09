@@ -181,11 +181,10 @@
         const successMessage = document.getElementById('successMessage');
 
         // Check if already logged in
-        const existingSession = localStorage.getItem('sessionId');
         const existingUser = JSON.parse(localStorage.getItem('user') || '{}');
 
-        if (existingSession && existingUser.id) {
-            // Redirect based on role
+        if (existingUser.id) {
+            // Redirect based on role (session is verified by server via cookie)
             if (existingUser.role === 'admin') {
                 window.location.href = '/admin-dashboard.html';
             } else {
@@ -220,7 +219,8 @@
 
                 if (result.success) {
                     // Store session data
-                    localStorage.setItem('sessionId', result.data.sessionId);
+                    // Session is stored in httpOnly cookie by the server
+                    // Only store non-sensitive user info in localStorage
                     localStorage.setItem('user', JSON.stringify(result.data.user));
                     localStorage.setItem('assignments', JSON.stringify(result.data.assignments));
 

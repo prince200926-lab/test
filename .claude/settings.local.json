@@ -17,7 +17,8 @@
       "Bash(node -c app.js)",
       "Bash(npm run:*)",
       "Bash(node:*)",
-      "Bash(npx kill-port:*)"
+      "Bash(npx kill-port:*)",
+      "Bash(npm install:*)"
     ]
   }
 }

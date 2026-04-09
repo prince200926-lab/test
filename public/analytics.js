@@ -3,10 +3,11 @@
 // Fetches live data from /api/analytics endpoints
 // ==========================================
 
-const sessionId  = localStorage.getItem('sessionId');
+// Session is now stored in httpOnly cookie (secure, not accessible to XSS)
+// Only non-sensitive user info is stored in localStorage
 const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
 
-if (!sessionId) { window.location.href = '/index.html'; }
+if (!currentUser.name) { window.location.href = '/index.html'; }
 
 document.getElementById('userName').textContent    = currentUser.name || 'User';
 document.getElementById('currentDate').textContent = new Date().toLocaleDateString('en-IN', {
@@ -70,9 +71,9 @@ async function apiFetch(url, opts = {}) {
     try {
         const res = await fetch(url, {
             ...opts,
+            credentials: 'include', // Sends httpOnly cookies automatically
             headers: {
                 'Content-Type': 'application/json',
-                'X-Session-Id': sessionId,
                 ...(opts.headers || {})
             }
         });
