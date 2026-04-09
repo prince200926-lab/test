@@ -171,11 +171,22 @@
         <!-- Summary -->
         <div class="summary-bar" id="summaryBar" style="display:none;"></div>
 
+        <!-- Instructions -->
+        <div style="background:#e3f2fd;border-left:4px solid #2196F3;padding:15px;border-radius:8px;margin-bottom:20px;" id="instructionsBox">
+            <strong>💡 How to enter marks:</strong>
+            <ol style="margin:8px 0 0 18px;font-size:13px;color:#555;line-height:1.6;">
+                <li>Select a <strong>Class</strong> from the dropdown above</li>
+                <li>Enter a <strong>Subject name</strong> (e.g., Maths, Science) and click <strong>+ Add Subject</strong></li>
+                <li>Click in the <strong>Marks</strong> column for each student and type their score</li>
+                <li>Click <strong>💾 Save All</strong> when done</li>
+            </ol>
+        </div>
+
         <!-- Main card -->
         <div class="card" id="marksCard">
-            <div class="empty-state">
+            <div class="empty-state" id="marksEmptyState">
                 <div class="icon">📋</div>
-                <div>Select a class and add a subject to start entering marks</div>
+                <div id="marksEmptyMsg">Select a class to start entering marks</div>
             </div>
         </div>
     </main>
@@ -214,13 +225,13 @@ document.getElementById('currentDate').textContent = new Date().toLocaleDateStri
 
     if (USER.role === 'admin') {
         nav.innerHTML = `
-            <a href="/admin-dashboard.html" class="nav-item" data-section="teachers">👥 Manage Teachers</a>
-            <a href="/admin-dashboard.html" class="nav-item" data-section="assignments">📚 Class Assignments</a>
-            <a href="/admin-dashboard.html" class="nav-item" data-section="students">👨‍🎓 Manage Students</a>
-            <a href="/admin-dashboard.html" class="nav-item" data-section="attendance">📊 Attendance Records</a>
+            <a href="admin-dashboard.html" class="nav-item" data-section="teachers">👥 Manage Teachers</a>
+            <a href="admin-dashboard.html" class="nav-item" data-section="assignments">📚 Class Assignments</a>
+            <a href="admin-dashboard.html" class="nav-item" data-section="students">👨‍🎓 Manage Students</a>
+            <a href="admin-dashboard.html" class="nav-item" data-section="attendance">📊 Attendance Records</a>
             ${sep()}
-            <a href="/analytics.html"  class="nav-item">🤖 ML Analytics</a>
-            <a href="/marks-entry.html" class="nav-item nav-item-marks">📝 Marks Entry</a>
+            <a href="analytics.html"  class="nav-item">🤖 ML Analytics</a>
+            <a href="marks-entry.html" class="nav-item nav-item-marks">📝 Marks Entry</a>
         `;
     } else {
         const asgn = JSON.parse(localStorage.getItem('assignments') || '{"ct":[],"st":[]}');
@@ -233,9 +244,9 @@ document.getElementById('currentDate').textContent = new Date().toLocaleDateStri
             <div style="padding:4px 15px 8px;">${rows || '<span style="color:rgba(255,255,255,.4);font-size:12px;">No assignments</span>'}</div>
             ${sep()}
             ${lbl('Navigation')}
-            <a href="/teacher-dashboard.html" class="nav-item">🏠 Dashboard</a>
-            <a href="/analytics.html"         class="nav-item">🤖 ML Analytics</a>
-            <a href="/marks-entry.html"       class="nav-item nav-item-marks">📝 Marks Entry</a>
+            <a href="teacher-dashboard.html" class="nav-item">🏠 Dashboard</a>
+            <a href="analytics.html"         class="nav-item">🤖 ML Analytics</a>
+            <a href="marks-entry.html"       class="nav-item nav-item-marks">📝 Marks Entry</a>
         `;
     }
 
@@ -278,9 +289,34 @@ function gradeCls(g) { return 'g-' + (g || ''); }
 
 // ── Init: load classes ─────────────────────────────────────────────────────────
 async function init() {
+    console.log('Marks Entry: Loading classes...');
     const data = await api('/api/marks/classes');
-    if (!data || !data.success) return;
+    console.log('Marks Entry: Classes response:', data);
+
+    if (!data) {
+        showToast('Network error loading classes', 'error');
+        return;
+    }
+    if (!data.success) {
+        showToast(data.message || 'Failed to load classes', 'error');
+        if (data.message && data.message.includes('session')) {
+            localStorage.clear();
+            window.location.href = '/index.html';
+        }
+        return;
+    }
+
     const sel = document.getElementById('classSelect');
+    if (data.classes.length === 0) {
+        sel.innerHTML = '<option value="">No classes available</option>';
+        document.getElementById('marksEmptyMsg').innerHTML = `
+            No classes with students found.<br><br>
+            <span style="font-size:13px;color:#888;">
+                Register students with a "Class" field in the <a href="/admin-dashboard.html" style="color:#667eea;">Admin Dashboard</a> first.
+            </span>`;
+        return;
+    }
+
     data.classes.forEach(c => sel.innerHTML += `<option value="${c}">${c}</option>`);
 
     // Auto-select if teacher has only one CT class
@@ -298,17 +334,50 @@ async function loadClass() {
     const cls = document.getElementById('classSelect').value;
     if (!cls) return;
 
+    console.log('Marks Entry: Loading class:', cls);
     const data = await api(`/api/marks/students/${encodeURIComponent(cls)}`);
-    if (!data || !data.success) { showToast('Failed to load students', 'error'); return; }
+    console.log('Marks Entry: Students response:', data);
 
-    students = data.students;
+    if (!data || !data.success) {
+        showToast(data?.message || 'Failed to load students', 'error');
+        return;
+    }
+
+    students = data.students || [];
     subjects = [];
     activeSubIdx = 0;
 
+    if (students.length === 0) {
+        document.getElementById('marksCard').innerHTML = `<div class="empty-state">
+            <div class="icon">👨‍🎓</div>
+            <div>No students registered in class ${cls}</div>
+            <div style="margin-top:10px;font-size:13px;color:#888;">
+                Register students in the <a href="/admin-dashboard.html" style="color:#667eea;">Admin Dashboard</a>
+            </div>
+        </div>`;
+        document.getElementById('summaryBar').style.display = 'none';
+        return;
+    }
+
     // Load existing marks for this class
     const existing = await api(`/api/marks/records/${encodeURIComponent(cls)}`);
+    console.log('Marks Entry: Existing marks:', existing);
     if (existing && existing.success && existing.records.length) {
         rebuildSubjectsFromRecords(existing.records);
+    }
+
+    // AUTO-ADD a default subject if none exist, so user can start entering marks immediately
+    if (subjects.length === 0) {
+        const defaultSubject = document.getElementById('subjectInput').value.trim() || 'Subject';
+        const defaultExam = document.getElementById('examSelect').value;
+        subjects.push({
+            name: defaultSubject,
+            exam: defaultExam,
+            maxMark: defaultMax(defaultExam),
+            marks: {}
+        });
+        activeSubIdx = 0;
+        showToast(`Auto-added "${defaultSubject}". Change name in the Subject field if needed.`, 'success');
     }
 
     renderSubjectTabs();
@@ -458,7 +527,13 @@ function renderTable() {
 
     // Summary bar
     const avg = entered ? Math.round(total / entered) : 0;
-    const avgPct = entered ? Math.round((total / entered / maxMark) * 100) : 0;
+    // Fix: Calculate average of individual percentages, not (avg/maxMark)*100
+    let totalPctSum = 0;
+    students.forEach(st => {
+        const v = sub.marks[st.id];
+        if (v !== undefined && v !== '') totalPctSum += (Number(v) / maxMark) * 100;
+    });
+    const avgPct = entered ? Math.round(totalPctSum / entered) : 0;
     sumBar.style.display = 'flex';
     sumBar.innerHTML = `
         ${sc('Total students', students.length)}
@@ -504,12 +579,19 @@ function renderSummary() {
     if (!subjects.length || !students.length) { sumBar.style.display = 'none'; return; }
     const sub = subjects[activeSubIdx];
     const maxMark = sub.maxMark;
-    let entered = 0, total = 0, above75 = 0;
+    let entered = 0, total = 0, above75 = 0, below45 = 0, totalPctSum = 0;
     students.forEach(st => {
         const v = sub.marks[st.id];
-        if (v !== undefined && v !== '') { entered++; total += Number(v); if ((Number(v)/maxMark)*100 >= 75) above75++; }
+        if (v !== undefined && v !== '') {
+            entered++;
+            total += Number(v);
+            const pct = (Number(v) / maxMark) * 100;
+            totalPctSum += pct;
+            if (pct >= 75) above75++;
+            if (pct < 45) below45++;
+        }
     });
-    const avgPct = entered ? Math.round((total/entered/maxMark)*100) : 0;
+    const avgPct = entered ? Math.round(totalPctSum / entered) : 0;
     sumBar.innerHTML = `
         ${sc('Total students', students.length)}
         ${sc('Marks entered', entered)}

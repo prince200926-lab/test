@@ -182,12 +182,14 @@
         <!-- AI INSIGHT -->
         <div class="tab-pane" id="tab-ai">
             <div class="ai-section">
-                <h3>AI-powered analysis via Gemini</h3>
-                <div class="desc">Uses <strong>Google Gemini 1.5 Flash</strong> (free — 1500 req/day, no credit card). Sends live data for pattern analysis, intervention recommendations, and predictions.</div>
+                <h3>AI-powered analysis via Google Gemini</h3>
+                <div class="desc">Uses <strong>Gemini 1.5 Flash</strong> (free tier: 1500 requests/day, no credit card required). Get your API key at <a href="https://aistudio.google.com/app/apikey" target="_blank">Google AI Studio</a>. Sends live data for pattern analysis, intervention recommendations, and predictions.</div>
                 <div class="metric-row" id="aiSummaryMetrics"></div>
                 <button class="ai-run-btn" id="aiBtn" onclick="runAI()">Run AI analysis ↗</button>
             </div>
-            <div id="aiOutput"></div>
+            <div id="aiOutput">
+                <div class="empty-box" style="margin-top:10px;" id="aiDefaultMsg">Click "Run AI analysis" to generate insights from the current dataset.</div>
+            </div>
         </div>
     </main>
 </div>
@@ -214,12 +216,13 @@ document.getElementById('currentDate').textContent = new Date().toLocaleDateStri
 
     if (_user.role === 'admin') {
         nav.innerHTML = `
-            <a href="/admin-dashboard.html" class="nav-item" data-section="teachers">👥 Manage Teachers</a>
-            <a href="/admin-dashboard.html" class="nav-item" data-section="assignments">📚 Class Assignments</a>
-            <a href="/admin-dashboard.html" class="nav-item" data-section="students">👨‍🎓 Manage Students</a>
-            <a href="/admin-dashboard.html" class="nav-item" data-section="attendance">📊 Attendance Records</a>
+            <a href="admin-dashboard.html" class="nav-item" data-section="teachers">👥 Manage Teachers</a>
+            <a href="admin-dashboard.html" class="nav-item" data-section="assignments">📚 Class Assignments</a>
+            <a href="admin-dashboard.html" class="nav-item" data-section="students">👨‍🎓 Manage Students</a>
+            <a href="admin-dashboard.html" class="nav-item" data-section="attendance">📊 Attendance Records</a>
             ${sep()}
-            <a href="/analytics.html" class="nav-item nav-item-analytics">🤖 ML Analytics</a>
+            <a href="analytics.html" class="nav-item nav-item-analytics">🤖 ML Analytics</a>
+            <a href="marks-entry.html" class="nav-item">📝 Marks Entry</a>
         `;
     } else {
         const assignments = JSON.parse(localStorage.getItem('assignments') || '{"ct":[],"st":[]}');

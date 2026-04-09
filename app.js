@@ -10,14 +10,66 @@ const auth = require('./auth-middleware');
 
 // Create Express application
 const app = express();
-const PORT = 8080;
+const PORT = process.env.PORT || 8080;
+
+// ==========================================
+// RATE LIMITING (In-memory store)
+// ==========================================
+const rateLimits = new Map();
+const RATE_LIMIT_WINDOW = 60000; // 1 minute
+const RATE_LIMIT_MAX = 100; // requests per window
+
+function rateLimitMiddleware(req, res, next) {
+  const ip = req.ip || req.connection.remoteAddress;
+  const now = Date.now();
+
+  if (!rateLimits.has(ip)) {
+    rateLimits.set(ip, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
+    return next();
+  }
+
+  const limit = rateLimits.get(ip);
+
+  if (now > limit.resetTime) {
+    limit.count = 1;
+    limit.resetTime = now + RATE_LIMIT_WINDOW;
+    return next();
+  }
+
+  if (limit.count >= RATE_LIMIT_MAX) {
+    return res.status(429).json({
+      success: false,
+      message: 'Rate limit exceeded. Please try again later.'
+    });
+  }
+
+  limit.count++;
+  next();
+}
+
+// Clean up expired rate limit entries periodically
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, limit] of rateLimits.entries()) {
+    if (now > limit.resetTime) {
+      rateLimits.delete(ip);
+    }
+  }
+}, RATE_LIMIT_WINDOW);
 
 // ==========================================
 // MIDDLEWARE SETUP
 // ==========================================
 
+// ==========================================
+// CORS CONFIGURATION
+// ==========================================
+// For production, replace origin with specific domains:
+// origin: ['https://yourdomain.com', 'https://admin.yourdomain.com']
 app.use(cors({
-  origin: true,
+  origin: process.env.NODE_ENV === 'production'
+    ? (process.env.ALLOWED_ORIGINS || '').split(',')
+    : true,
   credentials: true
 }));
 
@@ -324,6 +376,48 @@ app.put('/admin/teachers/:id', auth.isAuthenticated, auth.isAdmin, (req, res) =>
 });
 
 /**
+ * POST /admin/teachers/:id/reset-password
+ * Reset teacher password (Admin only)
+ */
+app.post('/admin/teachers/:id/reset-password', auth.isAuthenticated, auth.isAdmin, (req, res) => {
+  try {
+    const teacherId = parseInt(req.params.id);
+    const { newPassword } = req.body;
+
+    if (!newPassword || newPassword.length < 4) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 4 characters'
+      });
+    }
+
+    const teacher = database.teachers.getById(teacherId);
+    if (!teacher) {
+      return res.status(404).json({
+        success: false,
+        message: 'Teacher not found'
+      });
+    }
+
+    database.teachers.updatePassword(teacherId, newPassword);
+
+    console.log(`✓ Password reset for teacher: ${teacher.username}`);
+
+    res.json({
+      success: true,
+      message: 'Password reset successfully'
+    });
+
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to reset password'
+    });
+  }
+});
+
+/**
  * DELETE /admin/teachers/:id
  * Delete teacher (Admin only)
  */
@@ -515,20 +609,22 @@ app.get('/admin/class-assignments', auth.isAuthenticated, auth.isAdmin, (req, re
 /**
  * POST /api/rfid/scan
  * Record attendance from ESP8266 RFID reader
+ * Rate limited to prevent spam
  */
-app.post('/api/rfid/scan', (req, res) => {
+app.post('/api/rfid/scan', rateLimitMiddleware, (req, res) => {
   try {
     const { cardId, apiKey } = req.body;
 
-    if (!cardId) {
+    if (!cardId || typeof cardId !== 'string') {
       return res.status(400).json({
         success: false,
-        message: 'cardId is required'
+        message: 'cardId is required and must be a string'
       });
     }
 
+    // Sanitize cardId: remove whitespace, limit length, uppercase
     const timestamp = new Date().toISOString();
-    const trimmedCardId = cardId.trim();
+    const trimmedCardId = cardId.trim().toUpperCase().slice(0, 50);
     
     console.log(`📱 ESP8266 scan - Card: "${trimmedCardId}"`);
 
@@ -624,15 +720,15 @@ app.post('/attendance', auth.isAuthenticated, auth.canMarkAttendance, (req, res)
   try {
     const { cardId, time } = req.body;
 
-    if (!cardId) {
+    if (!cardId || typeof cardId !== 'string') {
       return res.status(400).json({
         success: false,
-        message: 'cardId is required'
+        message: 'cardId is required and must be a string'
       });
     }
 
     const timestamp = time || new Date().toISOString();
-    const trimmedCardId = cardId.trim();
+    const trimmedCardId = cardId.trim().toUpperCase().slice(0, 50);
     
     console.log(`📝 Attendance request for card: "${trimmedCardId}"`);
 
@@ -747,6 +843,28 @@ app.get('/attendance/class/:className/today', auth.isAuthenticated, auth.hasClas
     res.status(500).json({
       success: false,
       message: 'Failed to fetch today\'s attendance'
+    });
+  }
+});
+
+/**
+ * GET /attendance/stats
+ * Get attendance statistics
+ */
+app.get('/attendance/stats', auth.isAuthenticated, (req, res) => {
+  try {
+    const stats = database.attendance.getStats();
+
+    res.json({
+      success: true,
+      data: stats
+    });
+
+  } catch (error) {
+    console.error('Error fetching attendance stats:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch attendance stats'
     });
   }
 });
@@ -1092,6 +1210,54 @@ app.delete('/admin/students/:id', auth.isAuthenticated, auth.isAdmin, (req, res)
 });
 
 /**
+ * POST /api/student/reset-password
+ * Reset student password (Admin only)
+ */
+app.post('/api/student/reset-password', auth.isAuthenticated, auth.isAdmin, (req, res) => {
+  try {
+    const { studentId, newPassword } = req.body;
+
+    if (!studentId || !newPassword) {
+      return res.status(400).json({
+        success: false,
+        message: 'Student ID and new password are required'
+      });
+    }
+
+    if (newPassword.length < 4) {
+      return res.status(400).json({
+        success: false,
+        message: 'Password must be at least 4 characters'
+      });
+    }
+
+    const student = database.students.getById(studentId);
+    if (!student) {
+      return res.status(404).json({
+        success: false,
+        message: 'Student not found'
+      });
+    }
+
+    database.students.updatePassword(studentId, newPassword);
+
+    console.log(`✓ Password reset for student: ${student.name}`);
+
+    res.json({
+      success: true,
+      message: 'Password reset successfully'
+    });
+
+  } catch (error) {
+    console.error('Reset student password error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to reset password'
+    });
+  }
+});
+
+/**
  * POST /admin/students/bulk-import
  * Bulk import students from CSV data (Admin only)
  */
@@ -1317,50 +1483,55 @@ app.post('/api/analytics/import-grades', auth.isAuthenticated, auth.isAdmin, (re
  
 /**
  * POST /api/analytics/ai-insight
- * Proxies the summary data to the Anthropic API and streams the result back.
+ * Proxies the summary data to Google Gemini API (free tier).
  * Body: { summary: string }
  *
- * Requires ANTHROPIC_API_KEY in environment:
- *   set it with:  export ANTHROPIC_API_KEY=sk-ant-...
- *   or add to a .env file and use: require('dotenv').config()
+ * Requires GEMINI_API_KEY in environment:
+ *   Get yours free at: https://aistudio.google.com/app/apikey
+ *   Set it with: export GEMINI_API_KEY=your-key-here
  */
 app.post('/api/analytics/ai-insight', auth.isAuthenticated, async (req, res) => {
   try {
     const { summary } = req.body;
     if (!summary) return res.status(400).json({ success: false, message: 'summary required' });
- 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
+
+    const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       return res.status(500).json({
         success: false,
-        message: 'ANTHROPIC_API_KEY not set. Add it to your environment: export ANTHROPIC_API_KEY=sk-ant-...'
+        message: 'GEMINI_API_KEY not set. Get a free key at https://aistudio.google.com/app/apikey'
       });
     }
- 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1024,
-        messages: [{
-          role: 'user',
-          content: `You are an educational data analyst for an Indian school RFID attendance system. Analyse this student attendance and academic performance data. Write 3–4 focused paragraphs covering: (1) key trend findings and what the correlation coefficient means in plain English, (2) which students need immediate intervention and exactly why, (3) predicted outcomes if attendance improves — give specific numbers, (4) concrete actionable steps for teachers this week. Be direct and specific.\n\n${summary}`
-        }]
-      })
-    });
- 
+
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          contents: [{
+            parts: [{
+              text: `You are an educational data analyst for an Indian school RFID attendance system. Analyse this student attendance and academic performance data. Write 3–4 focused paragraphs covering: (1) key trend findings and what the correlation coefficient means in plain English, (2) which students need immediate intervention and exactly why, (3) predicted outcomes if attendance improves — give specific numbers, (4) concrete actionable steps for teachers this week. Be direct and specific.\n\n${summary}`
+            }]
+          }],
+          generationConfig: {
+            temperature: 0.7,
+            maxOutputTokens: 1024
+          }
+        })
+      }
+    );
+
     const data = await response.json();
- 
+
     if (data.error) {
       return res.status(500).json({ success: false, message: data.error.message });
     }
- 
-    const insight = (data.content || []).map(b => b.text || '').join('');
+
+    // Extract text from Gemini response
+    const insight = data.candidates?.[0]?.content?.parts?.[0]?.text || 'No response from AI';
     res.json({ success: true, insight });
   } catch (error) {
     console.error('AI insight error:', error);
@@ -1372,36 +1543,6 @@ app.post('/api/analytics/ai-insight', auth.isAuthenticated, async (req, res) => 
 // ============================================================
 // MARKS ENTRY ROUTES
 // ============================================================
-
-// ── One-time table creation
-(function createMarksTable() {
-  database.db.exec(`
-    CREATE TABLE IF NOT EXISTS marks (
-      id             INTEGER PRIMARY KEY AUTOINCREMENT,
-      student_id     INTEGER NOT NULL,
-      class          TEXT NOT NULL,
-      subject        TEXT NOT NULL,
-      exam_type      TEXT NOT NULL,
-      marks_obtained REAL NOT NULL,
-      max_mark       REAL NOT NULL DEFAULT 100,
-      grade          TEXT,
-      entered_by     INTEGER,
-      created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
-      updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
-      FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
-      UNIQUE(student_id, subject, exam_type)
-    )
-  `);
-
-  // Add indexes
-  database.db.exec(`
-    CREATE INDEX IF NOT EXISTS idx_marks_student ON marks(student_id);
-    CREATE INDEX IF NOT EXISTS idx_marks_class   ON marks(class);
-    CREATE INDEX IF NOT EXISTS idx_marks_subject ON marks(subject, exam_type);
-  `);
-
-  console.log('✓ Marks table ready');
-})();
 
 // ── Prepared statements ───────────────────────────────────────────────────────
 const upsertMark = database.db.prepare(`

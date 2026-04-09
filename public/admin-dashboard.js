@@ -83,6 +83,7 @@ const navItems = document.querySelectorAll('.nav-item');
 const tabContents = document.querySelectorAll('.tab-content');
 
 const addTeacherModal = document.getElementById('addTeacherModal');
+const editTeacherModal = document.getElementById('editTeacherModal');
 const assignClassModal = document.getElementById('assignClassModal');
 const addStudentModal = document.getElementById('addStudentModal');
 const editStudentModal = document.getElementById('editStudentModal');
@@ -235,7 +236,8 @@ async function loadTeachers() {
                 <td>${ctDisplay}</td>
                 <td>${stDisplay}</td>
                 <td>
-                    <button class="btn-danger btn-sm" onclick="deleteTeacher(${teacher.id})">Delete</button>
+                    <button class="btn-secondary btn-sm" onclick="editTeacher(${teacher.id})">✏️ Edit</button>
+                    <button class="btn-danger btn-sm" onclick="deleteTeacher(${teacher.id})">🗑️ Delete</button>
                 </td>
             </tr>
         `;
@@ -243,6 +245,28 @@ async function loadTeachers() {
 
     html += `</tbody></table>`;
     teachersList.innerHTML = html;
+}
+
+async function editTeacher(teacherId) {
+    const result = await apiCall(`/admin/teachers`);
+
+    if (!result || !result.success) {
+        alert('Failed to load teachers');
+        return;
+    }
+
+    const teacher = result.data.find(t => t.id === teacherId);
+    if (!teacher) {
+        alert('Teacher not found');
+        return;
+    }
+
+    document.getElementById('editTeacherId').value = teacher.id;
+    document.getElementById('editTeacherName').value = teacher.name;
+    document.getElementById('editTeacherEmail').value = teacher.email;
+    document.getElementById('editTeacherPassword').value = '';
+
+    editTeacherModal.classList.add('active');
 }
 
 async function deleteTeacher(teacherId) {
@@ -683,6 +707,7 @@ addStudentBtn.addEventListener('click', () => {
 closeModalBtns.forEach(btn => {
     btn.addEventListener('click', () => {
         addTeacherModal.classList.remove('active');
+        editTeacherModal.classList.remove('active');
         assignClassModal.classList.remove('active');
         addStudentModal.classList.remove('active');
         editStudentModal.classList.remove('active');
@@ -695,7 +720,7 @@ closeModalBtns.forEach(btn => {
 // ==========================================
 document.getElementById('addTeacherForm').addEventListener('submit', async (e) => {
     e.preventDefault();
-    
+
     const formData = new FormData(e.target);
     const data = {
         username: formData.get('username'),
@@ -718,6 +743,53 @@ document.getElementById('addTeacherForm').addEventListener('submit', async (e) =
     } else {
         alert(result?.message || 'Failed to create teacher');
     }
+});
+
+document.getElementById('editTeacherForm').addEventListener('submit', async (e) => {
+    e.preventDefault();
+
+    const formData = new FormData(e.target);
+    const teacherId = formData.get('teacherId');
+    const newPassword = formData.get('newPassword');
+
+    const data = {
+        name: formData.get('name'),
+        email: formData.get('email')
+    };
+
+    // First update name and email
+    const updateResult = await apiCall(`/admin/teachers/${teacherId}`, {
+        method: 'PUT',
+        body: JSON.stringify(data)
+    });
+
+    if (!updateResult || !updateResult.success) {
+        alert('Failed to update teacher details');
+        return;
+    }
+
+    // Then reset password if provided
+    if (newPassword && newPassword.trim() !== '') {
+        if (newPassword.length < 4) {
+            alert('Password must be at least 4 characters');
+            return;
+        }
+
+        const passwordResult = await apiCall(`/admin/teachers/${teacherId}/reset-password`, {
+            method: 'POST',
+            body: JSON.stringify({ newPassword })
+        });
+
+        if (!passwordResult || !passwordResult.success) {
+            alert('Teacher details updated but password reset failed');
+            return;
+        }
+    }
+
+    alert('✓ Teacher updated successfully');
+    editTeacherModal.classList.remove('active');
+    e.target.reset();
+    loadTeachers();
 });
 
 document.getElementById('assignClassForm').addEventListener('submit', async (e) => {

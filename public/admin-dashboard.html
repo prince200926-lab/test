@@ -106,10 +106,10 @@
                 <a href="#" class="nav-item" data-tab="attendance">
                     📊 Attendance Records
                 </a>
-                <a href="/analytics.html" class="nav-item nav-item-analytics">
+                <a href="analytics.html" class="nav-item nav-item-analytics">
                     🤖 ML Analytics
                 </a>
-                <a href="/marks-entry.html" class="nav-item">
+                <a href="marks-entry.html" class="nav-item">
                     📝 Marks Entry
                 </a>
             </nav>
@@ -204,6 +204,36 @@
                 </div>
             </div>
         </main>
+    </div>
+
+    <!-- ==================== MODAL: Edit Teacher ==================== -->
+    <div class="modal" id="editTeacherModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2>Edit Teacher</h2>
+                <button class="close-modal">&times;</button>
+            </div>
+            <form id="editTeacherForm">
+                <input type="hidden" name="teacherId" id="editTeacherId">
+                <div class="form-group">
+                    <label>Full Name *</label>
+                    <input type="text" name="name" id="editTeacherName" required placeholder="e.g., John Smith">
+                </div>
+                <div class="form-group">
+                    <label>Email *</label>
+                    <input type="email" name="email" id="editTeacherEmail" required placeholder="e.g., john.smith@school.com">
+                </div>
+                <div class="form-group">
+                    <label>New Password (leave blank to keep current)</label>
+                    <input type="password" name="newPassword" id="editTeacherPassword" placeholder="Minimum 4 characters" minlength="4">
+                    <small style="color:#666;display:block;margin-top:5px;">🔒 Only enter if you want to reset the teacher's password</small>
+                </div>
+                <div class="modal-actions">
+                    <button type="button" class="btn-secondary cancel-btn">Cancel</button>
+                    <button type="submit" class="btn-primary">💾 Save Changes</button>
+                </div>
+            </form>
+        </div>
     </div>
 
     <!-- ==================== MODAL: Add Teacher ==================== -->

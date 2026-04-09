@@ -94,13 +94,31 @@ function attClass(a) { return a >= 75 ? 'att-high' : a >= 60 ? 'att-mid' : 'att-
 // BUG FIX #5: now calls /api/analytics/students/v2 (reads from marks table)
 // ==========================================
 async function loadAnalytics() {
+    console.log('Analytics: Loading data from /api/analytics/students/v2...');
     const data = await apiFetch('/api/analytics/students/v2');
-    if (!data || !data.success) {
-        alert('Failed to load analytics data. Make sure the server has the v2 route from marks-routes.js.');
+    console.log('Analytics: Response:', data);
+
+    if (!data) {
+        document.getElementById('overviewMetrics').innerHTML = '<div class="loading-msg" style="color:#c62828;">❌ Network error. Check that the server is running on port 8080.</div>';
         return;
     }
 
-    allStudents = data.data;
+    if (!data.success) {
+        const msg = data.message || 'Failed to load analytics data';
+        document.getElementById('overviewMetrics').innerHTML = `<div class="loading-msg" style="color:#c62828;">❌ ${msg}</div>`;
+        if (msg.toLowerCase().includes('session') || msg.toLowerCase().includes('unauthorized')) {
+            localStorage.clear();
+            window.location.href = '/index.html';
+        }
+        return;
+    }
+
+    allStudents = data.data || [];
+
+    if (allStudents.length === 0) {
+        document.getElementById('overviewMetrics').innerHTML = `<div class="loading-msg" style="color:#666;">📊 No student data found. <br><br>To see analytics:<ol style="text-align:left;margin:10px 0;"><li>Register students in Admin Dashboard</li><li>Record attendance via RFID scans</li><li>Enter marks via Marks Entry page</li></ol></div>`;
+        return;
+    }
 
     // Populate class filter
     const classes = ['All', ...new Set(allStudents.map(s => s.class).filter(Boolean).sort())];
@@ -154,7 +172,20 @@ function renderActiveTab() {
 function renderOverview() {
     const s = filteredStudents;
     if (!s.length) {
-        document.getElementById('overviewMetrics').innerHTML = '<div class="loading-msg">No data — enter marks via the Marks Entry page first</div>';
+        document.getElementById('overviewMetrics').innerHTML = '<div class="loading-msg">No students found in selected class</div>';
+        return;
+    }
+
+    // Check if any students have marks data
+    const hasMarks = s.some(st => st.avg_score > 0 || st.midterm > 0 || st.final_score > 0);
+    if (!hasMarks) {
+        document.getElementById('overviewMetrics').innerHTML = `<div class="loading-msg">
+            📚 Students exist but no marks found.<br><br>
+            Go to <a href="/marks-entry.html" style="color:#185FA5;">Marks Entry</a> to add exam scores.<br><br>
+            Attendance data will show once students scan their RFID cards.
+        </div>`;
+        document.getElementById('overviewCharts').innerHTML = '';
+        document.getElementById('studentTableWrap').innerHTML = '';
         return;
     }
 

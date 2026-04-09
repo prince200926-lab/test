@@ -131,6 +131,36 @@ if (passwordColumnExists.count === 0) {
 console.log('✓ Database tables created/verified');
 
 // ==========================================
+// CREATE MARKS TABLE (if not exists)
+// ==========================================
+db.exec(`
+  CREATE TABLE IF NOT EXISTS marks (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    student_id     INTEGER NOT NULL,
+    class          TEXT NOT NULL,
+    subject        TEXT NOT NULL,
+    exam_type      TEXT NOT NULL,
+    marks_obtained REAL NOT NULL,
+    max_mark       REAL NOT NULL DEFAULT 100,
+    grade          TEXT,
+    entered_by     INTEGER,
+    created_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE,
+    UNIQUE(student_id, subject, exam_type)
+  )
+`);
+
+// Add marks table indexes
+db.exec(`
+  CREATE INDEX IF NOT EXISTS idx_marks_student ON marks(student_id);
+  CREATE INDEX IF NOT EXISTS idx_marks_class   ON marks(class);
+  CREATE INDEX IF NOT EXISTS idx_marks_subject ON marks(subject, exam_type);
+`);
+
+console.log('✓ Marks table ready');
+
+// ==========================================
 // CREATE DEFAULT ADMIN (if not exists)
 // ==========================================
 const checkAdmin = db.prepare('SELECT COUNT(*) as count FROM teachers WHERE role = ?');
@@ -188,6 +218,10 @@ const deleteTeacher = db.prepare(`
 
 const updateLastLogin = db.prepare(`
   UPDATE teachers SET last_login = CURRENT_TIMESTAMP WHERE id = ?
+`);
+
+const updateTeacherPassword = db.prepare(`
+  UPDATE teachers SET password_hash = ? WHERE id = ?
 `);
 
 // ==========================================
@@ -455,7 +489,12 @@ module.exports = {
     updateLastLogin: (id) => {
       return updateLastLogin.run(id);
     },
-    
+
+    updatePassword: (id, newPassword) => {
+      const hashedPassword = bcrypt.hashSync(newPassword, 10);
+      return updateTeacherPassword.run(hashedPassword, id);
+    },
+
     verifyPassword: (plainPassword, hashedPassword) => {
       return bcrypt.compareSync(plainPassword, hashedPassword);
     }
