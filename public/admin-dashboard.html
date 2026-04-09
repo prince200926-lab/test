@@ -109,7 +109,7 @@
                 <a href="analytics.html" class="nav-item nav-item-analytics">
                     🤖 ML Analytics
                 </a>
-                <a href="marks-entry.html" class="nav-item">
+                <a href="/marks-entry.html" class="nav-item">
                     📝 Marks Entry
                 </a>
             </nav>
@@ -286,9 +286,13 @@
                     </select>
                 </div>
                 <div class="form-group">
-                    <label>Class Name *</label>
-                    <input type="text" name="className" placeholder="e.g., 10-A, 9-B, 12-Science" required>
-                    <small style="color:#666;display:block;margin-top:5px;">💡 Use consistent naming: 10-A, 10-B, 11-Science, etc.</small>
+                    <label>Class *</label>
+                    <input type="text" name="className" placeholder="e.g., 10, 11, 12" required>
+                </div>
+                <div class="form-group">
+                    <label>Section</label>
+                    <input type="text" name="section" placeholder="e.g., A, B, Science (optional)">
+                    <small style="color:#666;display:block;margin-top:5px;">💡 Use consistent naming: Class "10" with Section "A" for 10-A</small>
                 </div>
                 <div class="form-group">
                     <label>Assignment Type *</label>
@@ -344,7 +348,11 @@
                 </div>
                 <div class="form-group">
                     <label>Class *</label>
-                    <input type="text" name="studentClass" placeholder="e.g., 10-A" required>
+                    <input type="text" name="studentClass" placeholder="e.g., 10, 11, 12" required>
+                </div>
+                <div class="form-group">
+                    <label>Section</label>
+                    <input type="text" name="section" placeholder="e.g., A, B, C (optional)">
                 </div>
                 <div class="form-group">
                     <label>Roll Number</label>
@@ -384,7 +392,11 @@
                 </div>
                 <div class="form-group">
                     <label>Class</label>
-                    <input type="text" name="studentClass" id="editClass" placeholder="e.g., 10-A">
+                    <input type="text" name="studentClass" id="editClass" placeholder="e.g., 10, 11, 12">
+                </div>
+                <div class="form-group">
+                    <label>Section</label>
+                    <input type="text" name="section" id="editSection" placeholder="e.g., A, B, C">
                 </div>
                 <div class="form-group">
                     <label>Roll Number</label>
@@ -411,10 +423,10 @@
             </div>
             <div style="background:#e3f2fd;padding:15px;border-radius:8px;margin-bottom:20px;">
                 <strong>📝 CSV Format:</strong>
-                <pre style="background:white;padding:10px;border-radius:5px;margin-top:10px;overflow-x:auto;">cardId,name,class,rollNumber
-A1B2C3D4,John Doe,10-A,101
-E5F6G7H8,Jane Smith,10-B,102</pre>
-                <small style="color:#666;">Required: cardId, name | Optional: class, rollNumber</small>
+                <pre style="background:white;padding:10px;border-radius:5px;margin-top:10px;overflow-x:auto;">cardId,name,class,section,rollNumber
+A1B2C3D4,John Doe,10,A,101
+E5F6G7H8,Jane Smith,11,B,102</pre>
+                <small style="color:#666;">Required: cardId, name | Optional: class, section, rollNumber</small>
             </div>
             <form id="bulkImportForm">
                 <div class="form-group">

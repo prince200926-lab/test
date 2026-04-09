@@ -111,15 +111,21 @@ currentDate.textContent = new Date().toLocaleDateString('en-US', {
 // ==========================================
 navItems.forEach(item => {
     item.addEventListener('click', (e) => {
-        e.preventDefault();
         const tabName = item.dataset.tab;
-        
+
+        // Skip tab switching for external page links (no data-tab attribute)
+        if (!tabName) {
+            return; // Let the default href navigation happen
+        }
+
+        e.preventDefault();
+
         navItems.forEach(nav => nav.classList.remove('active'));
         tabContents.forEach(tab => tab.classList.remove('active'));
-        
+
         item.classList.add('active');
         document.getElementById(`${tabName}-tab`).classList.add('active');
-        
+
         const titles = {
             'teachers': 'Manage Teachers',
             'assignments': 'Class Assignments',
@@ -127,7 +133,7 @@ navItems.forEach(item => {
             'attendance': 'Attendance Records'
         };
         pageTitle.textContent = titles[tabName] || 'Dashboard';
-        
+
         loadTabData(tabName);
     });
 });
@@ -216,16 +222,19 @@ async function loadTeachers() {
 
     result.data.forEach(teacher => {
         if (teacher.role === 'admin') return;
-        
-        const ctClasses = teacher.classes.filter(c => c.is_class_teacher).map(c => c.class_name);
-        const stClasses = teacher.classes.filter(c => !c.is_class_teacher).map(c => c.class_name);
-        
-        const ctDisplay = ctClasses.length > 0 ? 
-            `<strong style="color: #4caf50;">${ctClasses.join(', ')}</strong>` : 
+
+        // Format class display with section (new model)
+        const formatClass = (c) => c.section ? `${c.class_name}-${c.section}` : c.class_name;
+
+        const ctClasses = teacher.classes.filter(c => c.is_class_teacher).map(formatClass);
+        const stClasses = teacher.classes.filter(c => !c.is_class_teacher).map(formatClass);
+
+        const ctDisplay = ctClasses.length > 0 ?
+            `<strong style="color: #4caf50;">${ctClasses.join(', ')}</strong>` :
             '<span style="color: #999;">Not assigned</span>';
-        
-        const stDisplay = stClasses.length > 0 ? 
-            `<span style="color: #2196f3;">${stClasses.join(', ')}</span>` : 
+
+        const stDisplay = stClasses.length > 0 ?
+            `<span style="color: #2196f3;">${stClasses.join(', ')}</span>` :
             '<span style="color: #999;">Not assigned</span>';
 
         html += `
@@ -307,14 +316,15 @@ async function loadAssignments() {
 
     const groupedByClass = {};
     result.data.forEach(assignment => {
-        if (!groupedByClass[assignment.class_name]) {
-            groupedByClass[assignment.class_name] = { ct: null, sts: [] };
+        const key = assignment.section ? `${assignment.class_name}-${assignment.section}` : assignment.class_name;
+        if (!groupedByClass[key]) {
+            groupedByClass[key] = { class_name: assignment.class_name, section: assignment.section, ct: null, sts: [] };
         }
-        
+
         if (assignment.is_class_teacher) {
-            groupedByClass[assignment.class_name].ct = assignment;
+            groupedByClass[key].ct = assignment;
         } else {
-            groupedByClass[assignment.class_name].sts.push(assignment);
+            groupedByClass[key].sts.push(assignment);
         }
     });
 
@@ -331,25 +341,25 @@ async function loadAssignments() {
             <tbody>
     `;
 
-    Object.keys(groupedByClass).sort().forEach(className => {
-        const data = groupedByClass[className];
+    Object.keys(groupedByClass).sort().forEach(key => {
+        const data = groupedByClass[key];
         const ctName = data.ct ? data.ct.teacher_name : '<span style="color: #f44336;">⚠️ No CT assigned</span>';
-        const stNames = data.sts.length > 0 ? 
-            data.sts.map(st => st.teacher_name).join(', ') : 
+        const stNames = data.sts.length > 0 ?
+            data.sts.map(st => st.teacher_name).join(', ') :
             '<span style="color: #999;">None</span>';
-        
+
         html += `
             <tr>
-                <td><strong>${className}</strong></td>
-                <td>${ctName}${data.ct ? ` <button class="btn-sm btn-danger" onclick="removeAssignment(${data.ct.teacher_id}, '${className}')">✕</button>` : ''}</td>
+                <td><strong>${key}</strong></td>
+                <td>${ctName}${data.ct ? ` <button class="btn-sm btn-danger" onclick="removeAssignment(${data.ct.teacher_id}, '${data.class_name}', '${data.section || ''}')">✕</button>` : ''}</td>
                 <td>
                     ${data.sts.map(st => `
-                        ${st.teacher_name} <button class="btn-sm btn-danger" onclick="removeAssignment(${st.teacher_id}, '${className}')">✕</button>
+                        ${st.teacher_name} <button class="btn-sm btn-danger" onclick="removeAssignment(${st.teacher_id}, '${data.class_name}', '${data.section || ''}')">✕</button>
                     `).join('<br>')}
                     ${data.sts.length === 0 ? stNames : ''}
                 </td>
                 <td>
-                    <button class="btn-secondary btn-sm" onclick="quickAssignST('${className}')">+ Add ST</button>
+                    <button class="btn-secondary btn-sm" onclick="quickAssignST('${data.class_name}', '${data.section || ''}')">+ Add ST</button>
                 </td>
             </tr>
         `;
@@ -359,14 +369,15 @@ async function loadAssignments() {
     assignmentsList.innerHTML = html;
 }
 
-async function removeAssignment(teacherId, className) {
-    if (!confirm(`Remove teacher from ${className}?`)) {
+async function removeAssignment(teacherId, className, section) {
+    const displayName = section ? `${className}-${section}` : className;
+    if (!confirm(`Remove teacher from ${displayName}?`)) {
         return;
     }
 
     const result = await apiCall('/admin/assign-class', {
         method: 'DELETE',
-        body: JSON.stringify({ teacherId, className })
+        body: JSON.stringify({ teacherId, className, section })
     });
 
     if (result && result.success) {
@@ -377,30 +388,32 @@ async function removeAssignment(teacherId, className) {
     }
 }
 
-async function quickAssignST(className) {
+async function quickAssignST(className, section) {
+    const displayName = section ? `${className}-${section}` : className;
     const result = await apiCall('/admin/teachers');
-    
+
     if (!result || !result.success) {
         alert('Failed to load teachers');
         return;
     }
-    
+
     const teachers = result.data;
     const teacherNames = teachers.map(t => `${t.id}. ${t.name}`).join('\n');
-    
-    const teacherId = prompt(`Assign Subject Teacher to ${className}\n\nEnter Teacher ID:\n\n${teacherNames}`);
-    
+
+    const teacherId = prompt(`Assign Subject Teacher to ${displayName}\n\nEnter Teacher ID:\n\n${teacherNames}`);
+
     if (!teacherId) return;
-    
+
     const assignResult = await apiCall('/admin/assign-class', {
         method: 'POST',
         body: JSON.stringify({
             teacherId: parseInt(teacherId),
             className: className,
+            section: section,
             isClassTeacher: false
         })
     });
-    
+
     if (assignResult && assignResult.success) {
         alert('Subject Teacher assigned successfully');
         loadAssignments();
@@ -445,19 +458,21 @@ async function loadStudents() {
     `;
 
     result.data.forEach(student => {
-        const lastSeen = student.stats.lastSeen ? 
-            new Date(student.stats.lastSeen).toLocaleString() : 
+        const lastSeen = student.stats.lastSeen ?
+            new Date(student.stats.lastSeen).toLocaleString() :
             'Never';
-        
-        const hasPassword = student.password_hash ? 
-            '<span style="color: green;">✓</span>' : 
+
+        const hasPassword = student.password_hash ?
+            '<span style="color: green;">✓</span>' :
             '<span style="color: red;">✗</span>';
-        
+
+        const classDisplay = student.section ? `${student.class}-${student.section}` : (student.class || 'N/A');
+
         html += `
             <tr>
                 <td><strong>${student.name}</strong></td>
                 <td><code>${student.card_id}</code></td>
-                <td>${student.class || 'N/A'}</td>
+                <td>${classDisplay}</td>
                 <td>${student.roll_number || 'N/A'}</td>
                 <td>${hasPassword}</td>
                 <td><span style="color: #2196f3; font-weight: bold;">${student.stats.totalAttendance}</span></td>
@@ -488,6 +503,7 @@ async function editStudent(studentId) {
     document.getElementById('editCardId').value = student.card_id;
     document.getElementById('editName').value = student.name;
     document.getElementById('editClass').value = student.class || '';
+    document.getElementById('editSection').value = student.section || '';
     document.getElementById('editRollNumber').value = student.roll_number || '';
 
     document.getElementById('editStudentStats').innerHTML = `
@@ -511,7 +527,8 @@ async function deleteStudent(studentId) {
 
     const student = result.data;
 
-    if (!confirm(`⚠️ Delete student "${student.name}"?\n\nCard ID: ${student.card_id}\nClass: ${student.class || 'N/A'}\n\nThis action cannot be undone!`)) {
+    const classDisplay = student.section ? `${student.class}-${student.section}` : student.class;
+    if (!confirm(`⚠️ Delete student "${student.name}"?\n\nCard ID: ${student.card_id}\nClass: ${classDisplay || 'N/A'}\n\nThis action cannot be undone!`)) {
         return;
     }
 
@@ -681,22 +698,26 @@ addTeacherBtn.addEventListener('click', () => {
 assignClassBtn.addEventListener('click', async () => {
     const result = await apiCall('/admin/teachers');
     const teacherSelect = document.getElementById('teacherSelect');
-    
+
     teacherSelect.innerHTML = '<option value="">-- Select Teacher --</option>';
-    
+
     if (result && result.success) {
         result.data.forEach(teacher => {
             if (teacher.role === 'admin') return;
-            
+
+            // Format class display with section (new model)
+            const formatClass = (c) => c.section ? `${c.class_name}-${c.section}` : c.class_name;
+
             const ctClass = teacher.classes.find(c => c.is_class_teacher);
-            const ctInfo = ctClass ? ` [CT of ${ctClass.class_name}]` : '';
+            const ctDisplay = ctClass ? formatClass(ctClass) : '';
+            const ctInfo = ctClass ? ` [CT of ${ctDisplay}]` : '';
             const stCount = teacher.classes.filter(c => !c.is_class_teacher).length;
             const stInfo = stCount > 0 ? ` [ST of ${stCount} classes]` : '';
-            
+
             teacherSelect.innerHTML += `<option value="${teacher.id}">${teacher.name}${ctInfo}${stInfo}</option>`;
         });
     }
-    
+
     assignClassModal.classList.add('active');
 });
 
@@ -802,6 +823,7 @@ document.getElementById('assignClassForm').addEventListener('submit', async (e) 
     const data = {
         teacherId: parseInt(formData.get('teacherId')),
         className: formData.get('className'),
+        section: formData.get('section') || null,
         isClassTeacher: isClassTeacher
     };
 
@@ -829,6 +851,7 @@ document.getElementById('addStudentForm').addEventListener('submit', async (e) =
         cardId: formData.get('cardId'),
         name: formData.get('name'),
         studentClass: formData.get('studentClass'),
+        section: formData.get('section') || null,
         rollNumber: formData.get('rollNumber'),
         password: formData.get('password')
     };
@@ -864,6 +887,7 @@ document.getElementById('editStudentForm').addEventListener('submit', async (e) 
         cardId: formData.get('cardId'),
         name: formData.get('name'),
         studentClass: formData.get('studentClass'),
+        section: formData.get('section') || null,
         rollNumber: formData.get('rollNumber')
     };
 
@@ -916,7 +940,8 @@ document.getElementById('bulkImportForm').addEventListener('submit', async (e) =
                 cardId: parts[0],
                 name: parts[1],
                 studentClass: parts[2] || null,
-                rollNumber: parts[3] || null
+                section: parts[3] || null,
+                rollNumber: parts[4] || null
             });
         }
     });

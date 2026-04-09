@@ -111,7 +111,7 @@ async function apiCall(endpoint, options = {}) {
 }
 
 // ==========================================
-// INITIALIZE DASHBOARD
+// INITIALIZE DASHBOARD - Adapted for new class/section model
 // ==========================================
 async function initDashboard() {
     console.log('Initializing dashboard...');
@@ -121,7 +121,8 @@ async function initDashboard() {
     updateSidebar();
 
     if (assignments.ct && assignments.ct.length > 0) {
-        selectedCTClass = assignments.ct[0].class_name;
+        selectedCTAssignment = assignments.ct[0];
+        selectedCTClass = selectedCTAssignment.class_name;
         await initCTSection();
     } else {
         ctContent.innerHTML = `
@@ -134,7 +135,8 @@ async function initDashboard() {
     }
 
     if (assignments.st && assignments.st.length > 0) {
-        selectedSTClass = assignments.st[0].class_name;
+        selectedSTAssignment = assignments.st[0];
+        selectedSTClass = selectedSTAssignment.class_name;
         await initSTSection();
     } else {
         stContent.innerHTML = `
@@ -148,16 +150,19 @@ async function initDashboard() {
 }
 
 // ==========================================
-// UPDATE SIDEBAR
+// UPDATE SIDEBAR - Adapted for new class/section model
 // ==========================================
 function updateSidebar() {
     let html = '';
+
+    // Helper to format class display with section
+    const formatClass = (a) => a.section ? `${a.class_name}-${a.section}` : a.class_name;
 
     if (assignments.ct && assignments.ct.length > 0) {
         html += '<div style="margin-bottom: 15px;">';
         html += '<strong style="color: #4CAF50; font-size: 12px;">CT of:</strong><br>';
         assignments.ct.forEach(a => {
-            html += `<span style="color: #333; font-size: 14px;">• ${a.class_name}</span><br>`;
+            html += `<span style="color: #333; font-size: 14px;">• ${formatClass(a)}</span><br>`;
         });
         html += '</div>';
     }
@@ -166,7 +171,7 @@ function updateSidebar() {
         html += '<div>';
         html += '<strong style="color: #2196F3; font-size: 12px;">ST of:</strong><br>';
         assignments.st.forEach(a => {
-            html += `<span style="color: #333; font-size: 14px;">• ${a.class_name}</span><br>`;
+            html += `<span style="color: #333; font-size: 14px;">• ${formatClass(a)}</span><br>`;
         });
         html += '</div>';
     }
@@ -179,26 +184,40 @@ function updateSidebar() {
 }
 
 // ==========================================
-// CLASS TEACHER SECTION
+// CLASS TEACHER SECTION - Adapted for new class/section model
 // ==========================================
+// Store full assignment object for current selection
+let selectedCTAssignment = null;
+
 async function initCTSection() {
     let html = '';
+
+    // Helper to format class display with section
+    const formatClass = (a) => a.section ? `${a.class_name}-${a.section}` : a.class_name;
 
     if (assignments.ct.length > 1) {
         html += `
             <div class="class-selector">
                 <label>Select Class:</label>
                 <select id="ctClassSelect" onchange="handleCTClassChange(this.value)">
-                    ${assignments.ct.map(a => 
-                        `<option value="${a.class_name}" ${a.class_name === selectedCTClass ? 'selected' : ''}>
-                            ${a.class_name}
-                        </option>`
-                    ).join('')}
+                    ${assignments.ct.map(a => {
+                        const classDisplay = formatClass(a);
+                        const value = JSON.stringify({ class_name: a.class_name, section: a.section });
+                        const isSelected = selectedCTAssignment &&
+                            selectedCTAssignment.class_name === a.class_name &&
+                            selectedCTAssignment.section === a.section;
+                        return `<option value='${value}' ${isSelected ? 'selected' : ''}>
+                            ${classDisplay}
+                        </option>`;
+                    }).join('')}
                 </select>
             </div>
         `;
     } else {
-        html += `<h3 style="margin: 0 0 15px 0; color: #4CAF50;">Class: ${selectedCTClass}</h3>`;
+        const assignment = assignments.ct[0];
+        selectedCTAssignment = assignment;
+        selectedCTClass = assignment.class_name;
+        html += `<h3 style="margin: 0 0 15px 0; color: #4CAF50;">Class: ${formatClass(assignment)}</h3>`;
     }
 
     html += '<div id="ctStats"><p class="loading">Loading stats...</p></div>';
@@ -246,7 +265,13 @@ async function initCTSection() {
 }
 
 async function loadCTData() {
-    const result = await apiCall(`/attendance/class/${selectedCTClass}/today`);
+    // Build API URL with section parameter if available
+    let apiUrl = `/attendance/class/${selectedCTClass}/today`;
+    if (selectedCTAssignment?.section) {
+        apiUrl += `?section=${encodeURIComponent(selectedCTAssignment.section)}`;
+    }
+
+    const result = await apiCall(apiUrl);
 
     if (result && result.success) {
         const stats = result.data.stats;
@@ -330,30 +355,44 @@ async function markCTAttendance() {
     }
 }
 
-function handleCTClassChange(className) {
-    selectedCTClass = className;
+function handleCTClassChange(value) {
+    try {
+        selectedCTAssignment = JSON.parse(value);
+        selectedCTClass = selectedCTAssignment.class_name;
+    } catch (e) {
+        // Fallback for old format
+        selectedCTClass = value;
+        selectedCTAssignment = assignments.ct.find(a => a.class_name === value) || null;
+    }
     initCTSection();
 }
 
 function viewCTHistory() {
-    alert('History view coming soon! Will show attendance records for ' + selectedCTClass);
+    const display = selectedCTAssignment?.section
+        ? `${selectedCTClass}-${selectedCTAssignment.section}`
+        : selectedCTClass;
+    alert('History view coming soon! Will show attendance records for ' + display);
 }
 
 function showAddStudentModal() {
     const name = prompt('Enter student name:');
     if (!name) return;
-    
+
     const cardId = prompt('Enter student card ID:');
     if (!cardId) return;
-    
+
     const rollNumber = prompt('Enter roll number (optional):');
-    
+
+    // Include section if CT assignment has one (new model)
+    const section = selectedCTAssignment?.section || null;
+
     apiCall('/students/register', {
         method: 'POST',
         body: JSON.stringify({
             name: name,
             cardId: cardId,
             studentClass: selectedCTClass,
+            section: section,
             rollNumber: rollNumber || null
         })
     }).then(result => {
@@ -367,20 +406,31 @@ function showAddStudentModal() {
 }
 
 // ==========================================
-// SUBJECT TEACHER SECTION
+// SUBJECT TEACHER SECTION - Adapted for new class/section model
 // ==========================================
+// Store full assignment object for ST selection
+let selectedSTAssignment = null;
+
 async function initSTSection() {
     let html = '';
+
+    // Helper to format class display with section
+    const formatClass = (a) => a.section ? `${a.class_name}-${a.section}` : a.class_name;
 
     html += `
         <div class="class-selector">
             <label>Select Class:</label>
             <select id="stClassSelect" onchange="handleSTClassChange(this.value)">
-                ${assignments.st.map(a => 
-                    `<option value="${a.class_name}" ${a.class_name === selectedSTClass ? 'selected' : ''}>
-                        ${a.class_name}
-                    </option>`
-                ).join('')}
+                ${assignments.st.map(a => {
+                    const classDisplay = formatClass(a);
+                    const value = JSON.stringify({ class_name: a.class_name, section: a.section });
+                    const isSelected = selectedSTAssignment &&
+                        selectedSTAssignment.class_name === a.class_name &&
+                        selectedSTAssignment.section === a.section;
+                    return `<option value='${value}' ${isSelected ? 'selected' : ''}>
+                        ${classDisplay}
+                    </option>`;
+                }).join('')}
             </select>
         </div>
     `;
@@ -401,7 +451,13 @@ async function initSTSection() {
 }
 
 async function loadSTData() {
-    const result = await apiCall(`/attendance/class/${selectedSTClass}/today`);
+    // Build API URL with section parameter if available
+    let apiUrl = `/attendance/class/${selectedSTClass}/today`;
+    if (selectedSTAssignment?.section) {
+        apiUrl += `?section=${encodeURIComponent(selectedSTAssignment.section)}`;
+    }
+
+    const result = await apiCall(apiUrl);
 
     if (result && result.success) {
         const stats = result.data.stats;
@@ -431,8 +487,15 @@ async function loadSTData() {
     }
 }
 
-function handleSTClassChange(className) {
-    selectedSTClass = className;
+function handleSTClassChange(value) {
+    try {
+        selectedSTAssignment = JSON.parse(value);
+        selectedSTClass = selectedSTAssignment.class_name;
+    } catch (e) {
+        // Fallback for old format
+        selectedSTClass = value;
+        selectedSTAssignment = assignments.st.find(a => a.class_name === value) || null;
+    }
     loadSTData();
 }
 

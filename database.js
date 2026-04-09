@@ -46,10 +46,11 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     teacher_id INTEGER NOT NULL,
     class_name TEXT NOT NULL,
+    section TEXT,
     is_class_teacher BOOLEAN DEFAULT 0,
     assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE CASCADE,
-    UNIQUE(teacher_id, class_name)
+    UNIQUE(teacher_id, class_name, section)
   )
 `);
 
@@ -67,7 +68,7 @@ db.exec(`
 `);
 
 /**
- * Students Table - WITH PASSWORD SUPPORT
+ * Students Table - WITH PASSWORD SUPPORT and SEPARATE SECTION FIELD
  */
 db.exec(`
   CREATE TABLE IF NOT EXISTS students (
@@ -75,6 +76,7 @@ db.exec(`
     card_id TEXT UNIQUE NOT NULL,
     name TEXT NOT NULL,
     class TEXT,
+    section TEXT,
     roll_number TEXT,
     password_hash TEXT,
     registered_at DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -91,6 +93,7 @@ db.exec(`
     student_id INTEGER,
     student_name TEXT,
     class TEXT,
+    section TEXT,
     timestamp DATETIME NOT NULL,
     recorded_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (student_id) REFERENCES students(id)
@@ -129,6 +132,302 @@ if (passwordColumnExists.count === 0) {
 }
 
 console.log('✓ Database tables created/verified');
+console.log('✓ Class/Section migration complete - using separate columns model');
+
+// ==========================================
+// MIGRATE CLASS DATA - Split combined values into class and section
+// ==========================================
+
+// Helper function to parse combined class names
+function parseClassName(className) {
+  if (!className) return { base: '', section: '' };
+
+  // Check if it has a hyphen (e.g., "10-A", "11-Science")
+  if (className.includes('-')) {
+    const parts = className.split('-');
+    return { base: parts[0], section: parts[1] || '' };
+  }
+
+  // No hyphen - extract digits for base, letters for section
+  // Examples: "11B" -> base: "11", section: "B"
+  // "10A" -> base: "10", section: "A"
+  // "12Science" -> base: "12", section: "Science"
+  const match = className.match(/^(\d+)([a-zA-Z]+)$/);
+  if (match) {
+    return { base: match[1], section: match[2] };
+  }
+
+  // Just numbers - no section
+  const numMatch = className.match(/^(\d+)$/);
+  if (numMatch) {
+    return { base: numMatch[1], section: '' };
+  }
+
+  return { base: className, section: '' };
+}
+
+// Check if section column exists in students table
+const checkStudentsSectionColumn = db.prepare(`
+  SELECT COUNT(*) as count
+  FROM pragma_table_info('students')
+  WHERE name='section'
+`);
+
+const studentsSectionExists = checkStudentsSectionColumn.get();
+
+if (studentsSectionExists.count === 0) {
+  try {
+    db.exec(`ALTER TABLE students ADD COLUMN section TEXT`);
+    console.log('✓ Added section column to students table');
+  } catch (error) {
+    console.log('⚠️  Section column may already exist in students table');
+  }
+}
+
+// Check if section column exists in attendance table
+const checkAttendanceSectionColumn = db.prepare(`
+  SELECT COUNT(*) as count
+  FROM pragma_table_info('attendance')
+  WHERE name='section'
+`);
+
+const attendanceSectionExists = checkAttendanceSectionColumn.get();
+
+if (attendanceSectionExists.count === 0) {
+  try {
+    db.exec(`ALTER TABLE attendance ADD COLUMN section TEXT`);
+    console.log('✓ Added section column to attendance table');
+  } catch (error) {
+    console.log('⚠️  Section column may already exist in attendance table');
+  }
+}
+
+// Check if section column exists in marks table
+const checkMarksSectionColumn = db.prepare(`
+  SELECT COUNT(*) as count
+  FROM pragma_table_info('marks')
+  WHERE name='section'
+`);
+
+const marksSectionExists = checkMarksSectionColumn.get();
+
+if (marksSectionExists.count === 0) {
+  try {
+    db.exec(`ALTER TABLE marks ADD COLUMN section TEXT`);
+    console.log('✓ Added section column to marks table');
+  } catch (error) {
+    console.log('⚠️  Section column may already exist in marks table');
+  }
+}
+
+// Check if section column exists in teacher_classes table
+const checkTeacherClassesSectionColumn = db.prepare(`
+  SELECT COUNT(*) as count
+  FROM pragma_table_info('teacher_classes')
+  WHERE name='section'
+`);
+
+const teacherClassesSectionExists = checkTeacherClassesSectionColumn.get();
+
+if (teacherClassesSectionExists.count === 0) {
+  try {
+    db.exec(`ALTER TABLE teacher_classes ADD COLUMN section TEXT`);
+    console.log('✓ Added section column to teacher_classes table');
+  } catch (error) {
+    console.log('⚠️  Section column may already exist in teacher_classes table');
+  }
+}
+
+// Migrate existing data in students table
+const migrateStudents = db.prepare(`
+  UPDATE students SET class = ?, section = ? WHERE id = ?
+`);
+
+const studentsToMigrate = db.prepare(`SELECT id, class FROM students WHERE class IS NOT NULL AND (section IS NULL OR section = '')`).all();
+
+let migratedStudents = 0;
+for (const student of studentsToMigrate) {
+  const parsed = parseClassName(student.class);
+  if (parsed.section) {
+    migrateStudents.run(parsed.base, parsed.section, student.id);
+    migratedStudents++;
+  }
+}
+if (migratedStudents > 0) {
+  console.log(`✓ Migrated ${migratedStudents} students to separate class/section`);
+}
+
+// Migrate existing data in attendance table
+const migrateAttendance = db.prepare(`
+  UPDATE attendance SET class = ?, section = ? WHERE id = ?
+`);
+
+const attendanceToMigrate = db.prepare(`SELECT id, class FROM attendance WHERE class IS NOT NULL AND (section IS NULL OR section = '')`).all();
+
+let migratedAttendance = 0;
+for (const record of attendanceToMigrate) {
+  const parsed = parseClassName(record.class);
+  if (parsed.section) {
+    migrateAttendance.run(parsed.base, parsed.section, record.id);
+    migratedAttendance++;
+  }
+}
+if (migratedAttendance > 0) {
+  console.log(`✓ Migrated ${migratedAttendance} attendance records to separate class/section`);
+}
+
+// Migrate existing data in marks table
+const migrateMarks = db.prepare(`
+  UPDATE marks SET class = ?, section = ? WHERE id = ?
+`);
+
+const marksToMigrate = db.prepare(`SELECT id, class FROM marks WHERE class IS NOT NULL AND (section IS NULL OR section = '')`).all();
+
+let migratedMarks = 0;
+for (const mark of marksToMigrate) {
+  const parsed = parseClassName(mark.class);
+  if (parsed.section) {
+    migrateMarks.run(parsed.base, parsed.section, mark.id);
+    migratedMarks++;
+  }
+}
+if (migratedMarks > 0) {
+  console.log(`✓ Migrated ${migratedMarks} marks records to separate class/section`);
+}
+
+// FIX: Recreate teacher_classes table if it has the old unique constraint (without section)
+// This is needed because SQLite doesn't support dropping constraints
+function recreateTeacherClassesTable() {
+  try {
+    // First ensure section column exists
+    const sectionCol = db.prepare(`
+      SELECT COUNT(*) as count FROM pragma_table_info('teacher_classes') WHERE name='section'
+    `).get();
+
+    if (sectionCol.count === 0) {
+      try {
+        db.exec(`ALTER TABLE teacher_classes ADD COLUMN section TEXT`);
+        console.log('✓ Added section column to teacher_classes table');
+      } catch (error) {
+        console.log('⚠️  Section column may already exist in teacher_classes table');
+      }
+    }
+
+    // Check if we need to recreate with proper unique constraint
+    // Create temp table with new schema
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS teacher_classes_new (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        teacher_id INTEGER NOT NULL,
+        class_name TEXT NOT NULL,
+        section TEXT,
+        is_class_teacher BOOLEAN DEFAULT 0,
+        assigned_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (teacher_id) REFERENCES teachers(id) ON DELETE CASCADE,
+        UNIQUE(teacher_id, class_name, section)
+      )
+    `);
+
+    // Copy existing data with proper section handling
+    const existingData = db.prepare(`
+      SELECT id, teacher_id, class_name, section, is_class_teacher, assigned_at
+      FROM teacher_classes
+    `).all();
+
+    const insertNew = db.prepare(`
+      INSERT OR IGNORE INTO teacher_classes_new
+      (id, teacher_id, class_name, section, is_class_teacher, assigned_at)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `);
+
+    for (const row of existingData) {
+      const parsed = parseClassName(row.class_name);
+      const baseClass = parsed.section ? parsed.base : row.class_name;
+      const section = parsed.section || row.section || '';
+      insertNew.run(row.id, row.teacher_id, baseClass, section || null, row.is_class_teacher, row.assigned_at);
+    }
+
+    // Drop old table and rename new one
+    db.exec(`
+      DROP TABLE IF EXISTS teacher_classes;
+      ALTER TABLE teacher_classes_new RENAME TO teacher_classes;
+    `);
+
+    console.log('✓ Recreated teacher_classes table with proper unique constraint');
+  } catch (error) {
+    console.log('⚠️  Could not recreate teacher_classes table:', error.message);
+  }
+}
+
+// Run the table recreation before migration
+recreateTeacherClassesTable();
+
+// Migrate existing data in teacher_classes table (this is now mostly for data sanity)
+const teacherClassesToMigrate = db.prepare(`SELECT id, teacher_id, class_name, is_class_teacher FROM teacher_classes WHERE class_name IS NOT NULL AND (section IS NULL OR section = '')`).all();
+
+let migratedTeacherClasses = 0;
+let skippedTeacherClasses = 0;
+
+for (const tc of teacherClassesToMigrate) {
+  const parsed = parseClassName(tc.class_name);
+  if (parsed.section) {
+    // Check if a record already exists for this teacher with the target base class
+    const existingBaseClass = db.prepare(`
+      SELECT id, class_name, section FROM teacher_classes WHERE teacher_id = ? AND class_name = ? AND id != ?
+    `).get(tc.teacher_id, parsed.base, tc.id);
+
+    if (existingBaseClass) {
+      // A record with the base class already exists.
+      // If the existing one has no section, merge the data by updating it with the section
+      const existingSection = existingBaseClass.section || getSection(existingBaseClass.class_name);
+      if (!existingSection) {
+        // Update the existing record to add the section, delete the current one
+        db.prepare(`UPDATE teacher_classes SET section = ? WHERE id = ?`).run(parsed.section, existingBaseClass.id);
+        db.prepare(`DELETE FROM teacher_classes WHERE id = ?`).run(tc.id);
+        migratedTeacherClasses++;
+      } else if (existingSection === parsed.section) {
+        // Same section already exists, just delete this duplicate
+        db.prepare(`DELETE FROM teacher_classes WHERE id = ?`).run(tc.id);
+        skippedTeacherClasses++;
+      } else {
+        // Different section - update this record (should work if unique constraint is updated)
+        try {
+          db.prepare(`UPDATE teacher_classes SET class_name = ?, section = ? WHERE id = ?`).run(parsed.base, parsed.section, tc.id);
+          migratedTeacherClasses++;
+        } catch (e) {
+          console.log(`⚠️  Could not migrate teacher_classes row ${tc.id}: ${e.message}`);
+          skippedTeacherClasses++;
+        }
+      }
+    } else {
+      // No conflict - safe to update
+      try {
+        db.prepare(`UPDATE teacher_classes SET class_name = ?, section = ? WHERE id = ?`).run(parsed.base, parsed.section, tc.id);
+        migratedTeacherClasses++;
+      } catch (e) {
+        console.log(`⚠️  Could not migrate teacher_classes row ${tc.id}: ${e.message}`);
+        skippedTeacherClasses++;
+      }
+    }
+  }
+}
+if (migratedTeacherClasses > 0) {
+  console.log(`✓ Migrated ${migratedTeacherClasses} teacher class assignments to separate class/section`);
+}
+if (skippedTeacherClasses > 0) {
+  console.log(`⚠️  Skipped ${skippedTeacherClasses} teacher class assignments (duplicates or conflicts)`);
+}
+
+// Helper to extract section from class_name
+function getSection(className) {
+  if (!className) return '';
+  if (className.includes('-')) {
+    const parts = className.split('-');
+    return parts[1] || '';
+  }
+  const match = className.match(/^\d+([a-zA-Z]+)$/);
+  return match ? match[1] : '';
+}
 
 // ==========================================
 // CREATE MARKS TABLE (if not exists)
@@ -138,6 +437,7 @@ db.exec(`
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     student_id     INTEGER NOT NULL,
     class          TEXT NOT NULL,
+    section        TEXT,
     subject        TEXT NOT NULL,
     exam_type      TEXT NOT NULL,
     marks_obtained REAL NOT NULL,
@@ -155,6 +455,7 @@ db.exec(`
 db.exec(`
   CREATE INDEX IF NOT EXISTS idx_marks_student ON marks(student_id);
   CREATE INDEX IF NOT EXISTS idx_marks_class   ON marks(class);
+  CREATE INDEX IF NOT EXISTS idx_marks_section ON marks(section);
   CREATE INDEX IF NOT EXISTS idx_marks_subject ON marks(subject, exam_type);
 `);
 
@@ -253,8 +554,8 @@ const cleanExpiredSessions = db.prepare(`
 // ==========================================
 
 const assignTeacherToClass = db.prepare(`
-  INSERT OR REPLACE INTO teacher_classes (teacher_id, class_name, is_class_teacher)
-  VALUES (?, ?, ?)
+  INSERT OR REPLACE INTO teacher_classes (teacher_id, class_name, section, is_class_teacher)
+  VALUES (?, ?, ?, ?)
 `);
 
 const getTeacherClasses = db.prepare(`
@@ -265,36 +566,55 @@ const getClassTeachers = db.prepare(`
   SELECT tc.*, t.name as teacher_name, t.email, t.role
   FROM teacher_classes tc
   JOIN teachers t ON tc.teacher_id = t.id
-  WHERE tc.class_name = ?
+  WHERE tc.class_name = ? AND (tc.section = ? OR tc.section IS NULL OR tc.section = '')
+`);
+
+const getClassTeachersBySection = db.prepare(`
+  SELECT tc.*, t.name as teacher_name, t.email, t.role
+  FROM teacher_classes tc
+  JOIN teachers t ON tc.teacher_id = t.id
+  WHERE tc.class_name = ? AND tc.section = ?
 `);
 
 const removeTeacherFromClass = db.prepare(`
-  DELETE FROM teacher_classes 
-  WHERE teacher_id = ? AND class_name = ?
+  DELETE FROM teacher_classes
+  WHERE teacher_id = ? AND class_name = ? AND (section = ? OR section IS NULL OR section = '')
+`);
+
+const removeTeacherFromClassBySection = db.prepare(`
+  DELETE FROM teacher_classes
+  WHERE teacher_id = ? AND class_name = ? AND section = ?
 `);
 
 const getAllClassAssignments = db.prepare(`
   SELECT tc.*, t.name as teacher_name, t.role
   FROM teacher_classes tc
   JOIN teachers t ON tc.teacher_id = t.id
-  ORDER BY tc.class_name, tc.is_class_teacher DESC, t.name
+  ORDER BY tc.class_name, tc.section, tc.is_class_teacher DESC, t.name
 `);
 
 const getTeacherCTAssignment = db.prepare(`
-  SELECT * FROM teacher_classes 
+  SELECT * FROM teacher_classes
   WHERE teacher_id = ? AND is_class_teacher = 1
 `);
 
 const countCTAssignments = db.prepare(`
-  SELECT COUNT(*) as count FROM teacher_classes 
+  SELECT COUNT(*) as count FROM teacher_classes
   WHERE teacher_id = ? AND is_class_teacher = 1
 `);
 
 const getClassCT = db.prepare(`
-  SELECT tc.*, t.name as teacher_name 
+  SELECT tc.*, t.name as teacher_name
   FROM teacher_classes tc
   JOIN teachers t ON tc.teacher_id = t.id
-  WHERE tc.class_name = ? AND tc.is_class_teacher = 1
+  WHERE tc.class_name = ? AND (tc.section = ? OR tc.section IS NULL OR tc.section = '') AND tc.is_class_teacher = 1
+`);
+
+const getClassCTBySection = db.prepare(`
+  SELECT tc.*, t.name as teacher_name
+  FROM teacher_classes tc
+  JOIN teachers t ON tc.teacher_id = t.id
+  WHERE tc.class_name = ? AND tc.section = ? AND tc.is_class_teacher = 1
 `);
 
 // ==========================================
@@ -302,8 +622,8 @@ const getClassCT = db.prepare(`
 // ==========================================
 
 const registerStudent = db.prepare(`
-  INSERT INTO students (card_id, name, class, roll_number, password_hash)
-  VALUES (?, ?, ?, ?, ?)
+  INSERT INTO students (card_id, name, class, section, roll_number, password_hash)
+  VALUES (?, ?, ?, ?, ?, ?)
 `);
 
 const getStudentByCardId = db.prepare(`
@@ -315,7 +635,11 @@ const getAllStudents = db.prepare(`
 `);
 
 const getStudentsByClass = db.prepare(`
-  SELECT * FROM students WHERE class = ? ORDER BY roll_number ASC
+  SELECT * FROM students WHERE class = ? AND (section = ? OR section IS NULL OR section = '') ORDER BY section, roll_number ASC
+`);
+
+const getStudentsByClassAndSection = db.prepare(`
+  SELECT * FROM students WHERE class = ? AND section = ? ORDER BY roll_number ASC
 `);
 
 const getStudentById = db.prepare(`
@@ -323,14 +647,14 @@ const getStudentById = db.prepare(`
 `);
 
 const updateStudent = db.prepare(`
-  UPDATE students 
-  SET card_id = ?, name = ?, class = ?, roll_number = ?
+  UPDATE students
+  SET card_id = ?, name = ?, class = ?, section = ?, roll_number = ?
   WHERE id = ?
 `);
 
 const updateStudentWithPassword = db.prepare(`
-  UPDATE students 
-  SET card_id = ?, name = ?, class = ?, roll_number = ?, password_hash = ?
+  UPDATE students
+  SET card_id = ?, name = ?, class = ?, section = ?, roll_number = ?, password_hash = ?
   WHERE id = ?
 `);
 
@@ -353,8 +677,8 @@ const cardIdExists = db.prepare(`
 // ==========================================
 
 const recordAttendance = db.prepare(`
-  INSERT INTO attendance (card_id, student_id, student_name, class, timestamp)
-  VALUES (?, ?, ?, ?, ?)
+  INSERT INTO attendance (card_id, student_id, student_name, class, section, timestamp)
+  VALUES (?, ?, ?, ?, ?, ?)
 `);
 
 const getAllAttendance = db.prepare(`
@@ -372,14 +696,27 @@ const getTodayAttendance = db.prepare(`
 `);
 
 const getTodayAttendanceByClass = db.prepare(`
-  SELECT * FROM attendance 
-  WHERE DATE(timestamp) = DATE('now') AND class = ?
+  SELECT * FROM attendance
+  WHERE DATE(timestamp) = DATE('now') AND class = ? AND (section = ? OR section IS NULL OR section = '')
+  ORDER BY timestamp DESC
+`);
+
+const getTodayAttendanceByClassAndSection = db.prepare(`
+  SELECT * FROM attendance
+  WHERE DATE(timestamp) = DATE('now') AND class = ? AND section = ?
   ORDER BY timestamp DESC
 `);
 
 const getAttendanceByClass = db.prepare(`
-  SELECT * FROM attendance 
-  WHERE class = ?
+  SELECT * FROM attendance
+  WHERE class = ? AND (section = ? OR section IS NULL OR section = '')
+  ORDER BY timestamp DESC
+  LIMIT ?
+`);
+
+const getAttendanceByClassAndSection = db.prepare(`
+  SELECT * FROM attendance
+  WHERE class = ? AND section = ?
   ORDER BY timestamp DESC
   LIMIT ?
 `);
@@ -405,21 +742,42 @@ const getTodayAttendanceCount = db.prepare(`
 `);
 
 const getTodayCountByClass = db.prepare(`
-  SELECT 
+  SELECT
     COUNT(DISTINCT student_id) as present_count,
     class
   FROM attendance
-  WHERE DATE(timestamp) = DATE('now') AND class = ?
+  WHERE DATE(timestamp) = DATE('now') AND class = ? AND (section = ? OR section IS NULL OR section = '')
+  GROUP BY class
+`);
+
+const getTodayCountByClassAndSection = db.prepare(`
+  SELECT
+    COUNT(DISTINCT student_id) as present_count,
+    class
+  FROM attendance
+  WHERE DATE(timestamp) = DATE('now') AND class = ? AND section = ?
   GROUP BY class
 `);
 
 const getAbsentStudentsByClass = db.prepare(`
-  SELECT s.* 
+  SELECT s.*
   FROM students s
-  WHERE s.class = ?
+  WHERE s.class = ? AND (s.section = ? OR s.section IS NULL OR s.section = '')
   AND s.id NOT IN (
-    SELECT DISTINCT student_id 
-    FROM attendance 
+    SELECT DISTINCT student_id
+    FROM attendance
+    WHERE DATE(timestamp) = DATE('now') AND student_id IS NOT NULL
+  )
+  ORDER BY s.roll_number
+`);
+
+const getAbsentStudentsByClassAndSection = db.prepare(`
+  SELECT s.*
+  FROM students s
+  WHERE s.class = ? AND s.section = ?
+  AND s.id NOT IN (
+    SELECT DISTINCT student_id
+    FROM attendance
     WHERE DATE(timestamp) = DATE('now') AND student_id IS NOT NULL
   )
   ORDER BY s.roll_number
@@ -440,12 +798,21 @@ const getAttendanceStats = db.prepare(`
 `);
 
 const getAttendanceStatsByClass = db.prepare(`
-  SELECT 
+  SELECT
     COUNT(*) as total_records,
     COUNT(DISTINCT student_id) as unique_students,
     COUNT(CASE WHEN DATE(timestamp) = DATE('now') THEN 1 END) as today_count
   FROM attendance
-  WHERE class = ?
+  WHERE class = ? AND (section = ? OR section IS NULL OR section = '')
+`);
+
+const getAttendanceStatsByClassAndSection = db.prepare(`
+  SELECT
+    COUNT(*) as total_records,
+    COUNT(DISTINCT student_id) as unique_students,
+    COUNT(CASE WHEN DATE(timestamp) = DATE('now') THEN 1 END) as today_count
+  FROM attendance
+  WHERE class = ? AND section = ?
 `);
 
 // ==========================================
@@ -521,71 +888,83 @@ module.exports = {
   
   // Teacher class assignments
   teacherClasses: {
-    assign: (teacherId, className, isClassTeacher) => {
-      return assignTeacherToClass.run(teacherId, className, isClassTeacher ? 1 : 0);
+    assign: (teacherId, className, section, isClassTeacher) => {
+      return assignTeacherToClass.run(teacherId, className, section, isClassTeacher ? 1 : 0);
     },
-    
+
     getByTeacher: (teacherId) => {
       return getTeacherClasses.all(teacherId);
     },
-    
-    getByClass: (className) => {
-      return getClassTeachers.all(className);
+
+    getByClass: (className, section) => {
+      if (section) {
+        return getClassTeachersBySection.all(className, section);
+      }
+      return getClassTeachers.all(className, '');
     },
-    
-    remove: (teacherId, className) => {
-      return removeTeacherFromClass.run(teacherId, className);
+
+    remove: (teacherId, className, section) => {
+      if (section) {
+        return removeTeacherFromClassBySection.run(teacherId, className, section);
+      }
+      return removeTeacherFromClass.run(teacherId, className, '');
     },
-    
+
     getAll: () => {
       return getAllClassAssignments.all();
     },
-    
+
     getCTAssignment: (teacherId) => {
       return getTeacherCTAssignment.get(teacherId);
     },
-    
+
     hasCTAssignment: (teacherId) => {
       const result = countCTAssignments.get(teacherId);
       return result.count > 0;
     },
-    
-    getClassCT: (className) => {
-      return getClassCT.get(className);
+
+    getClassCT: (className, section) => {
+      if (section) {
+        return getClassCTBySection.get(className, section);
+      }
+      return getClassCT.get(className, '');
     }
   },
   
   // Student operations - WITH PASSWORD SUPPORT
   students: {
-    register: (cardId, name, studentClass, rollNumber, password) => {
+    register: (cardId, name, studentClass, section, rollNumber, password) => {
       const hashedPassword = password ? bcrypt.hashSync(password, 10) : null;
-      return registerStudent.run(cardId, name, studentClass, rollNumber, hashedPassword);
+      return registerStudent.run(cardId, name, studentClass, section, rollNumber, hashedPassword);
     },
-    
+
     getByCardId: (cardId) => {
       return getStudentByCardId.get(cardId);
     },
-    
+
     getById: (id) => {
       return getStudentById.get(id);
     },
-    
+
     getAll: () => {
       return getAllStudents.all();
     },
-    
-    getByClass: (className) => {
-      return getStudentsByClass.all(className);
+
+    getByClass: (className, section) => {
+      if (section) {
+        return getStudentsByClassAndSection.all(className, section);
+      }
+      return getStudentsByClass.all(className, '');
     },
-    
-    update: (id, cardId, name, studentClass, rollNumber, password) => {
+
+    update: (id, cardId, name, studentClass, section, rollNumber, password) => {
       if (password) {
         // Update with new password
         const hashedPassword = bcrypt.hashSync(password, 10);
-        return updateStudentWithPassword.run(cardId, name, studentClass, rollNumber, hashedPassword, id);
+        return updateStudentWithPassword.run(cardId, name, studentClass, section, rollNumber, hashedPassword, id);
       } else {
         // Update without changing password
-        return updateStudent.run(cardId, name, studentClass, rollNumber, id);
+        return updateStudent.run(cardId, name, studentClass, section, rollNumber, id);
       }
     },
     
@@ -611,61 +990,78 @@ module.exports = {
   
   // Attendance operations
   attendance: {
-    record: (cardId, studentId, studentName, studentClass, timestamp) => {
-      return recordAttendance.run(cardId, studentId, studentName, studentClass, timestamp);
+    record: (cardId, studentId, studentName, studentClass, section, timestamp) => {
+      return recordAttendance.run(cardId, studentId, studentName, studentClass, section, timestamp);
     },
-    
+
     getAll: (limit = 100) => {
       return getAllAttendance.all(limit);
     },
-    
+
     getLatest: () => {
       return getLatestAttendance.all();
     },
-    
+
     getToday: () => {
       return getTodayAttendance.all();
     },
-    
-    getTodayByClass: (className) => {
-      return getTodayAttendanceByClass.all(className);
+
+    getTodayByClass: (className, section) => {
+      if (section) {
+        return getTodayAttendanceByClassAndSection.all(className, section);
+      }
+      return getTodayAttendanceByClass.all(className, '');
     },
-    
-    getByClass: (className, limit = 100) => {
-      return getAttendanceByClass.all(className, limit);
+
+    getByClass: (className, section, limit = 100) => {
+      if (section) {
+        return getAttendanceByClassAndSection.all(className, section, limit);
+      }
+      return getAttendanceByClass.all(className, '', limit);
     },
-    
+
     getByDateRange: (startDate, endDate) => {
       return getAttendanceByDateRange.all(startDate, endDate);
     },
-    
+
     getByStudent: (studentId, limit = 50) => {
       return getStudentAttendance.all(studentId, limit);
     },
-    
+
     getTodayCount: () => {
       return getTodayAttendanceCount.all();
     },
-    
-    getTodayCountByClass: (className) => {
-      const result = getTodayCountByClass.get(className);
+
+    getTodayCountByClass: (className, section) => {
+      let result;
+      if (section) {
+        result = getTodayCountByClassAndSection.get(className, section);
+      } else {
+        result = getTodayCountByClass.get(className, '');
+      }
       return result ? result.present_count : 0;
     },
-    
-    getAbsentByClass: (className) => {
-      return getAbsentStudentsByClass.all(className);
+
+    getAbsentByClass: (className, section) => {
+      if (section) {
+        return getAbsentStudentsByClassAndSection.all(className, section);
+      }
+      return getAbsentStudentsByClass.all(className, '');
     },
-    
+
     clearAll: () => {
       return clearAllAttendance.run();
     },
-    
+
     getStats: () => {
       return getAttendanceStats.get();
     },
-    
-    getStatsByClass: (className) => {
-      return getAttendanceStatsByClass.get(className);
+
+    getStatsByClass: (className, section) => {
+      if (section) {
+        return getAttendanceStatsByClassAndSection.get(className, section);
+      }
+      return getAttendanceStatsByClass.get(className, '');
     },
     
     getCountByStudent: (studentId) => {

@@ -12,7 +12,12 @@
       "Bash(node --check app.js)",
       "Bash(node --check database.js)",
       "Bash(timeout 5 node app.js)",
-      "Bash(timeout 3 node app.js)"
+      "Bash(timeout 3 node app.js)",
+      "Bash(node -c database.js)",
+      "Bash(node -c app.js)",
+      "Bash(npm run:*)",
+      "Bash(node:*)",
+      "Bash(npx kill-port:*)"
     ]
   }
 }

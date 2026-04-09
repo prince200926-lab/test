@@ -113,9 +113,16 @@
 
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px;">
             <div style="font-size:13px;color:#666;">Correlation · regression · risk detection · AI predictions</div>
-            <div style="display:flex;gap:8px;align-items:center;">
-                <select id="classFilter" style="font-size:13px;padding:6px 10px;border:1px solid #e0e0e0;border-radius:6px;">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <select id="classFilter" style="font-size:13px;padding:6px 10px;border:1px solid #e0e0e0;border-radius:6px;min-width:120px;">
                     <option value="All">All classes</option>
+                </select>
+                <select id="sectionFilter" style="font-size:13px;padding:6px 10px;border:1px solid #e0e0e0;border-radius:6px;min-width:100px;" disabled>
+                    <option value="All">All sections</option>
+                </select>
+                <select id="viewModeFilter" style="font-size:13px;padding:6px 10px;border:1px solid #e0e0e0;border-radius:6px;">
+                    <option value="all_sections">All sections combined</option>
+                    <option value="by_section">Breakdown by section</option>
                 </select>
                 <button onclick="loadAnalytics()" style="padding:6px 14px;background:#667eea;color:white;border:none;border-radius:6px;cursor:pointer;font-size:13px;">🔄 Refresh</button>
             </div>
@@ -222,7 +229,7 @@ document.getElementById('currentDate').textContent = new Date().toLocaleDateStri
             <a href="admin-dashboard.html" class="nav-item" data-section="attendance">📊 Attendance Records</a>
             ${sep()}
             <a href="analytics.html" class="nav-item nav-item-analytics">🤖 ML Analytics</a>
-            <a href="marks-entry.html" class="nav-item">📝 Marks Entry</a>
+            <a href="marks-entry.html" class="nav-item nav-item-marks">📝 Marks Entry</a>
         `;
     } else {
         const assignments = JSON.parse(localStorage.getItem('assignments') || '{"ct":[],"st":[]}');

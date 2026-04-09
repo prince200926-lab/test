@@ -466,7 +466,7 @@ app.delete('/admin/teachers/:id', auth.isAuthenticated, auth.isAdmin, (req, res)
  */
 app.post('/admin/assign-class', auth.isAuthenticated, auth.isAdmin, (req, res) => {
   try {
-    const { teacherId, className, isClassTeacher } = req.body;
+    const { teacherId, className, section, isClassTeacher } = req.body;
 
     if (!teacherId || !className) {
       return res.status(400).json({
@@ -495,21 +495,21 @@ app.post('/admin/assign-class', auth.isAuthenticated, auth.isAdmin, (req, res) =
     if (isClassTeacher) {
       // Check if teacher already has a CT assignment
       const existingCT = database.teacherClasses.getCTAssignment(teacherId);
-      
-      if (existingCT && existingCT.class_name !== className) {
+
+      if (existingCT && (existingCT.class_name !== className || existingCT.section !== section)) {
         return res.status(400).json({
           success: false,
-          message: `This teacher is already Class Teacher of ${existingCT.class_name}. A teacher can only be CT of ONE class. Remove that assignment first or assign as Subject Teacher instead.`
+          message: `This teacher is already Class Teacher of ${existingCT.class_name}${existingCT.section ? '-' + existingCT.section : ''}. A teacher can only be CT of ONE class. Remove that assignment first or assign as Subject Teacher instead.`
         });
       }
 
       // Check if class already has a different CT
-      const classCT = database.teacherClasses.getClassCT(className);
-      
+      const classCT = database.teacherClasses.getClassCT(className, section);
+
       if (classCT && classCT.teacher_id !== teacherId) {
         return res.status(400).json({
           success: false,
-          message: `Class ${className} already has a Class Teacher: ${classCT.teacher_name}. Remove them first or assign as Subject Teacher instead.`
+          message: `Class ${className}${section ? '-' + section : ''} already has a Class Teacher: ${classCT.teacher_name}. Remove them first or assign as Subject Teacher instead.`
         });
       }
     }
@@ -517,25 +517,26 @@ app.post('/admin/assign-class', auth.isAuthenticated, auth.isAdmin, (req, res) =
     // VALIDATION 2: If assigning as ST, make sure they're not already CT of this class
     if (!isClassTeacher) {
       const existingAssignment = database.teacherClasses.getByTeacher(teacherId)
-        .find(a => a.class_name === className && a.is_class_teacher);
-      
+        .find(a => a.class_name === className && a.section === section && a.is_class_teacher);
+
       if (existingAssignment) {
         return res.status(400).json({
           success: false,
-          message: `This teacher is already Class Teacher of ${className}. Cannot downgrade to Subject Teacher. Remove the assignment first.`
+          message: `This teacher is already Class Teacher of ${className}${section ? '-' + section : ''}. Cannot downgrade to Subject Teacher. Remove the assignment first.`
         });
       }
     }
 
     // All validations passed - assign the class
-    database.teacherClasses.assign(teacherId, className, isClassTeacher || false);
+    database.teacherClasses.assign(teacherId, className, section || null, isClassTeacher || false);
 
     const assignmentType = isClassTeacher ? 'Class Teacher' : 'Subject Teacher';
-    console.log(`✓ Teacher ${teacherId} assigned to ${className} as ${assignmentType}`);
+    const fullClassName = section ? `${className}-${section}` : className;
+    console.log(`✓ Teacher ${teacherId} assigned to ${fullClassName} as ${assignmentType}`);
 
     res.json({
       success: true,
-      message: `Successfully assigned as ${assignmentType} of ${className}`
+      message: `Successfully assigned as ${assignmentType} of ${fullClassName}`
     });
 
   } catch (error) {
@@ -552,7 +553,7 @@ app.post('/admin/assign-class', auth.isAuthenticated, auth.isAdmin, (req, res) =
  */
 app.delete('/admin/assign-class', auth.isAuthenticated, auth.isAdmin, (req, res) => {
   try {
-    const { teacherId, className } = req.body;
+    const { teacherId, className, section } = req.body;
 
     if (!teacherId || !className) {
       return res.status(400).json({
@@ -561,9 +562,10 @@ app.delete('/admin/assign-class', auth.isAuthenticated, auth.isAdmin, (req, res)
       });
     }
 
-    database.teacherClasses.remove(teacherId, className);
+    database.teacherClasses.remove(teacherId, className, section || null);
 
-    console.log(`✓ Teacher ${teacherId} removed from ${className}`);
+    const fullClassName = section ? `${className}-${section}` : className;
+    console.log(`✓ Teacher ${teacherId} removed from ${fullClassName}`);
 
     res.json({
       success: true,
@@ -633,13 +635,14 @@ app.post('/api/rfid/scan', rateLimitMiddleware, (req, res) => {
 
     if (!student) {
       console.log(`⚠️  Unknown card: ${trimmedCardId}`);
-      
+
       // Still record attendance even if student not registered
       const result = database.attendance.record(
         trimmedCardId,
         null,
         'Unknown Student',
         'N/A',
+        null,
         timestamp
       );
 
@@ -662,10 +665,11 @@ app.post('/api/rfid/scan', rateLimitMiddleware, (req, res) => {
       student.id,
       student.name,
       student.class,
+      student.section,
       timestamp
     );
 
-    console.log(`✓ Attendance recorded: ${student.name} (${student.class})`);
+    console.log(`✓ Attendance recorded: ${student.name} (Class: ${student.class}, Section: ${student.section})`);
 
     res.json({
       success: true,
@@ -677,6 +681,7 @@ app.post('/api/rfid/scan', rateLimitMiddleware, (req, res) => {
           id: student.id,
           name: student.name,
           class: student.class,
+          section: student.section,
           rollNumber: student.roll_number
         },
         status: 'present',
@@ -739,13 +744,16 @@ app.post('/attendance', auth.isAuthenticated, auth.canMarkAttendance, (req, res)
       student ? student.id : null,
       student ? student.name : 'Unknown Student',
       student ? student.class : 'N/A',
+      student ? student.section : null,
       timestamp
     );
 
     console.log('✓ Attendance recorded:', {
       id: result.lastInsertRowid,
       cardId: trimmedCardId,
-      student: student ? student.name : 'Unknown'
+      student: student ? student.name : 'Unknown',
+      class: student ? student.class : 'N/A',
+      section: student ? student.section : null
     });
 
     res.status(201).json({
@@ -771,13 +779,15 @@ app.post('/attendance', auth.isAuthenticated, auth.canMarkAttendance, (req, res)
 /**
  * GET /attendance/class/:className
  * Get attendance by class (Teachers with class access)
+ * Query params: section (optional)
  */
 app.get('/attendance/class/:className', auth.isAuthenticated, auth.hasClassAccess, (req, res) => {
   try {
     const { className } = req.params;
+    const { section } = req.query;
     const limit = parseInt(req.query.limit) || 100;
 
-    const records = database.attendance.getByClass(className, limit);
+    const records = database.attendance.getByClass(className, section || null, limit);
 
     res.json({
       success: true,
@@ -797,17 +807,19 @@ app.get('/attendance/class/:className', auth.isAuthenticated, auth.hasClassAcces
 /**
  * GET /attendance/class/:className/today
  * Get today's attendance for a class
+ * Query params: section (optional)
  */
 app.get('/attendance/class/:className/today', auth.isAuthenticated, auth.hasClassAccess, (req, res) => {
   try {
     const { className } = req.params;
+    const { section } = req.query;
 
     // For class teachers - show detailed records
     if (req.user.role === 'admin' || req.isClassTeacherForClass) {
-      const records = database.attendance.getTodayByClass(className);
-      const totalStudents = database.students.getByClass(className).length;
-      const presentCount = database.attendance.getTodayCountByClass(className);
-      const absentStudents = database.attendance.getAbsentByClass(className);
+      const records = database.attendance.getTodayByClass(className, section || null);
+      const totalStudents = database.students.getByClass(className, section || null).length;
+      const presentCount = database.attendance.getTodayCountByClass(className, section || null);
+      const absentStudents = database.attendance.getAbsentByClass(className, section || null);
 
       res.json({
         success: true,
@@ -823,8 +835,8 @@ app.get('/attendance/class/:className/today', auth.isAuthenticated, auth.hasClas
       });
     } else {
       // For subject teachers - show only counts
-      const totalStudents = database.students.getByClass(className).length;
-      const presentCount = database.attendance.getTodayCountByClass(className);
+      const totalStudents = database.students.getByClass(className, section || null).length;
+      const presentCount = database.attendance.getTodayCountByClass(className, section || null);
 
       res.json({
         success: true,
@@ -926,7 +938,7 @@ app.delete('/attendance/clear', auth.isAuthenticated, auth.isAdmin, (req, res) =
  */
 app.post('/students/register', auth.isAuthenticated, auth.isClassTeacher, (req, res) => {
   try {
-    const { cardId, name, studentClass, rollNumber } = req.body;
+    const { cardId, name, studentClass, section, rollNumber } = req.body;
 
     if (!cardId || !name) {
       return res.status(400).json({
@@ -946,10 +958,11 @@ app.post('/students/register', auth.isAuthenticated, auth.isClassTeacher, (req, 
       cardId,
       name,
       studentClass || null,
+      section || null,
       rollNumber || null
     );
 
-    console.log('✓ Student registered:', name);
+    console.log('✓ Student registered:', name, `(Class: ${studentClass}, Section: ${section})`);
 
     res.status(201).json({
       success: true,
@@ -957,7 +970,9 @@ app.post('/students/register', auth.isAuthenticated, auth.isClassTeacher, (req, 
       data: {
         id: result.lastInsertRowid,
         cardId,
-        name
+        name,
+        class: studentClass,
+        section: section
       }
     });
 
@@ -996,11 +1011,13 @@ app.get('/students', auth.isAuthenticated, (req, res) => {
 /**
  * GET /students/class/:className
  * Get students by class
+ * Query params: section (optional)
  */
 app.get('/students/class/:className', auth.isAuthenticated, auth.hasClassAccess, (req, res) => {
   try {
     const { className } = req.params;
-    const students = database.students.getByClass(className);
+    const { section } = req.query;
+    const students = database.students.getByClass(className, section || null);
 
     res.json({
       success: true,
@@ -1106,7 +1123,7 @@ app.get('/admin/students/:id', auth.isAuthenticated, auth.isAdmin, (req, res) =>
 app.put('/admin/students/:id', auth.isAuthenticated, auth.isAdmin, (req, res) => {
   try {
     const studentId = parseInt(req.params.id);
-    const { cardId, name, studentClass, rollNumber } = req.body;
+    const { cardId, name, studentClass, section, rollNumber } = req.body;
 
     if (!name) {
       return res.status(400).json({
@@ -1141,6 +1158,7 @@ app.put('/admin/students/:id', auth.isAuthenticated, auth.isAdmin, (req, res) =>
       cardId || existingStudent.card_id,
       name,
       studentClass || null,
+      section || null,
       rollNumber || null
     );
 
@@ -1154,6 +1172,7 @@ app.put('/admin/students/:id', auth.isAuthenticated, auth.isAdmin, (req, res) =>
         cardId: cardId || existingStudent.card_id,
         name,
         class: studentClass,
+        section: section,
         rollNumber
       }
     });
@@ -1263,7 +1282,7 @@ app.post('/api/student/reset-password', auth.isAuthenticated, auth.isAdmin, (req
  */
 app.post('/admin/students/bulk-import', auth.isAuthenticated, auth.isAdmin, (req, res) => {
   try {
-    const { students } = req.body; // Array of {cardId, name, class, rollNumber}
+    const { students } = req.body; // Array of {cardId, name, class, section, rollNumber}
 
     if (!Array.isArray(students) || students.length === 0) {
       return res.status(400).json({
@@ -1280,7 +1299,7 @@ app.post('/admin/students/bulk-import', auth.isAuthenticated, auth.isAdmin, (req
 
     students.forEach((student, index) => {
       try {
-        const { cardId, name, studentClass, rollNumber } = student;
+        const { cardId, name, studentClass, section, rollNumber } = student;
 
         if (!cardId || !name) {
           results.failed++;
@@ -1307,6 +1326,7 @@ app.post('/admin/students/bulk-import', auth.isAuthenticated, auth.isAdmin, (req
           cardId,
           name,
           studentClass || null,
+          section || null,
           rollNumber || null
         );
 
@@ -1546,8 +1566,8 @@ app.post('/api/analytics/ai-insight', auth.isAuthenticated, async (req, res) => 
 
 // ── Prepared statements ───────────────────────────────────────────────────────
 const upsertMark = database.db.prepare(`
-  INSERT INTO marks (student_id, class, subject, exam_type, marks_obtained, max_mark, grade, entered_by)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  INSERT INTO marks (student_id, class, section, subject, exam_type, marks_obtained, max_mark, grade, entered_by)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
   ON CONFLICT(student_id, subject, exam_type)
   DO UPDATE SET
     marks_obtained = excluded.marks_obtained,
@@ -1561,7 +1581,15 @@ const getMarksByClass = database.db.prepare(`
   SELECT m.*, s.name as student_name, s.roll_number
   FROM marks m
   JOIN students s ON m.student_id = s.id
-  WHERE m.class = ?
+  WHERE m.class = ? AND (m.section = ? OR m.section IS NULL OR m.section = '')
+  ORDER BY s.roll_number, m.subject, m.exam_type
+`);
+
+const getMarksByClassAndSection = database.db.prepare(`
+  SELECT m.*, s.name as student_name, s.roll_number
+  FROM marks m
+  JOIN students s ON m.student_id = s.id
+  WHERE m.class = ? AND m.section = ?
   ORDER BY s.roll_number, m.subject, m.exam_type
 `);
 
@@ -1602,20 +1630,32 @@ app.get('/api/marks/classes', auth.isAuthenticated, (req, res) => {
 
 // ── GET /api/marks/students/:class ───────────────────────────────────────────
 // Returns students in a class (teacher must have access)
+// Query params: section (optional)
+// OPTIMIZED: Uses new separate class/section model
 app.get('/api/marks/students/:className', auth.isAuthenticated, (req, res) => {
   try {
     const { className } = req.params;
+    const { section } = req.query;
 
     // Access check
     if (req.user.role !== 'admin') {
       const assignments = database.teacherClasses.getByTeacher(req.user.id);
-      const hasAccess   = assignments.some(a => a.class_name === className);
+      const hasAccess   = assignments.some(a => {
+        // Match base class
+        if (a.class_name !== className) return false;
+        // If teacher has no section, they have access to all sections
+        if (!a.section) return true;
+        // If section requested, must match
+        if (section) return a.section === section;
+        // No section requested, teacher has section-specific access
+        return true;
+      });
       if (!hasAccess) {
         return res.status(403).json({ success: false, message: 'No access to this class' });
       }
     }
 
-    const students = database.students.getByClass(className);
+    const students = database.students.getByClass(className, section || null);
     res.json({ success: true, students });
   } catch (error) {
     console.error('Get students error:', error);
@@ -1625,18 +1665,33 @@ app.get('/api/marks/students/:className', auth.isAuthenticated, (req, res) => {
 
 // ── GET /api/marks/records/:class ────────────────────────────────────────────
 // Returns all mark records for a class
+// Query params: section (optional)
+// OPTIMIZED: Uses new separate class/section model
 app.get('/api/marks/records/:className', auth.isAuthenticated, (req, res) => {
   try {
     const { className } = req.params;
+    const { section } = req.query;
 
     if (req.user.role !== 'admin') {
       const assignments = database.teacherClasses.getByTeacher(req.user.id);
-      if (!assignments.some(a => a.class_name === className)) {
+      const hasAccess = assignments.some(a => {
+        if (a.class_name !== className) return false;
+        // Teacher with no section assignment has access to all sections
+        if (!a.section) return true;
+        // Otherwise section must match
+        return a.section === section || (!section);
+      });
+      if (!hasAccess) {
         return res.status(403).json({ success: false, message: 'No access to this class' });
       }
     }
 
-    const records = getMarksByClass.all(className);
+    let records;
+    if (section) {
+      records = getMarksByClassAndSection.all(className, section);
+    } else {
+      records = getMarksByClass.all(className, '');
+    }
     res.json({ success: true, records });
   } catch (error) {
     console.error('Get records error:', error);
@@ -1671,7 +1726,8 @@ app.get('/api/marks/report/:studentId', auth.isAuthenticated, (req, res) => {
 });
 
 // ── POST /api/marks/save ─────────────────────────────────────────────────────
-// Bulk upsert marks. Body: { records: [{studentId, subject, examType, maxMark, marksObtained, grade, className}] }
+// Bulk upsert marks. Body: { records: [{studentId, subject, examType, maxMark, marksObtained, grade, className, section}] }
+// OPTIMIZED: Uses new separate class/section model
 app.post('/api/marks/save', auth.isAuthenticated, (req, res) => {
   try {
     const { records } = req.body;
@@ -1682,9 +1738,17 @@ app.post('/api/marks/save', auth.isAuthenticated, (req, res) => {
 
     // Access check on first record's class
     const className = records[0].className;
+    const section = records[0].section;
     if (req.user.role !== 'admin') {
       const assignments = database.teacherClasses.getByTeacher(req.user.id);
-      if (!assignments.some(a => a.class_name === className)) {
+      const hasAccess = assignments.some(a => {
+        if (a.class_name !== className) return false;
+        // Teacher with no section assignment can edit all sections
+        if (!a.section) return true;
+        // Otherwise section must match
+        return a.section === section || (!section);
+      });
+      if (!hasAccess) {
         return res.status(403).json({ success: false, message: 'No access to this class' });
       }
     }
@@ -1692,9 +1756,12 @@ app.post('/api/marks/save', auth.isAuthenticated, (req, res) => {
     let saved = 0;
     const doAll = database.db.transaction(() => {
       records.forEach(r => {
+        // Ensure className is base class only (strip section if included)
+        const baseClass = r.className ? r.className.split('-')[0] : r.className;
         upsertMark.run(
           r.studentId,
-          r.className,
+          baseClass,
+          r.section || null,
           r.subject,
           r.examType,
           r.marksObtained,
@@ -1739,25 +1806,47 @@ app.delete('/api/marks/record', auth.isAuthenticated, (req, res) => {
 
 // ── GET /api/marks/summary ────────────────────────────────────────────────────
 // Class-level summary for analytics (used by /analytics.html)
+// Query params: section (optional)
 app.get('/api/marks/summary/:className', auth.isAuthenticated, (req, res) => {
   try {
     const { className } = req.params;
+    const { section } = req.query;
 
-    const stmt = database.db.prepare(`
-      SELECT
-        s.id, s.name, s.roll_number,
-        AVG(CASE WHEN m.exam_type = 'midterm' THEN (m.marks_obtained * 100.0 / m.max_mark) END) as midterm_pct,
-        AVG(CASE WHEN m.exam_type = 'final'   THEN (m.marks_obtained * 100.0 / m.max_mark) END) as final_pct,
-        AVG(m.marks_obtained * 100.0 / m.max_mark) as overall_pct,
-        COUNT(m.id) as subjects_entered
-      FROM students s
-      LEFT JOIN marks m ON m.student_id = s.id AND m.class = ?
-      WHERE s.class = ?
-      GROUP BY s.id
-      ORDER BY s.roll_number
-    `);
+    let stmt;
+    let summary;
 
-    const summary = stmt.all(className, className);
+    if (section) {
+      stmt = database.db.prepare(`
+        SELECT
+          s.id, s.name, s.roll_number,
+          AVG(CASE WHEN m.exam_type = 'midterm' THEN (m.marks_obtained * 100.0 / m.max_mark) END) as midterm_pct,
+          AVG(CASE WHEN m.exam_type = 'final'   THEN (m.marks_obtained * 100.0 / m.max_mark) END) as final_pct,
+          AVG(m.marks_obtained * 100.0 / m.max_mark) as overall_pct,
+          COUNT(m.id) as subjects_entered
+        FROM students s
+        LEFT JOIN marks m ON m.student_id = s.id AND m.class = ? AND m.section = ?
+        WHERE s.class = ? AND s.section = ?
+        GROUP BY s.id
+        ORDER BY s.roll_number
+      `);
+      summary = stmt.all(className, section, className, section);
+    } else {
+      stmt = database.db.prepare(`
+        SELECT
+          s.id, s.name, s.roll_number,
+          AVG(CASE WHEN m.exam_type = 'midterm' THEN (m.marks_obtained * 100.0 / m.max_mark) END) as midterm_pct,
+          AVG(CASE WHEN m.exam_type = 'final'   THEN (m.marks_obtained * 100.0 / m.max_mark) END) as final_pct,
+          AVG(m.marks_obtained * 100.0 / m.max_mark) as overall_pct,
+          COUNT(m.id) as subjects_entered
+        FROM students s
+        LEFT JOIN marks m ON m.student_id = s.id AND m.class = ? AND (m.section IS NULL OR m.section = '')
+        WHERE s.class = ? AND (s.section IS NULL OR s.section = '')
+        GROUP BY s.id
+        ORDER BY s.roll_number
+      `);
+      summary = stmt.all(className, className);
+    }
+
     res.json({ success: true, summary });
   } catch (error) {
     console.error('Summary error:', error);
@@ -1767,22 +1856,45 @@ app.get('/api/marks/summary/:className', auth.isAuthenticated, (req, res) => {
 
 // ── GET /api/marks/leaderboard/:class ────────────────────────────────────────
 // Top performers in a class
+// Query params: section (optional)
 app.get('/api/marks/leaderboard/:className', auth.isAuthenticated, (req, res) => {
   try {
     const { className } = req.params;
-    const stmt = database.db.prepare(`
-      SELECT s.name, s.roll_number,
-        ROUND(AVG(m.marks_obtained * 100.0 / m.max_mark), 1) as avg_pct,
-        COUNT(m.id) as subjects
-      FROM students s
-      JOIN marks m ON m.student_id = s.id AND m.class = ?
-      WHERE s.class = ?
-      GROUP BY s.id
-      HAVING subjects > 0
-      ORDER BY avg_pct DESC
-      LIMIT 10
-    `);
-    const leaderboard = stmt.all(className, className);
+    const { section } = req.query;
+
+    let stmt;
+    let leaderboard;
+
+    if (section) {
+      stmt = database.db.prepare(`
+        SELECT s.name, s.roll_number,
+          ROUND(AVG(m.marks_obtained * 100.0 / m.max_mark), 1) as avg_pct,
+          COUNT(m.id) as subjects
+        FROM students s
+        JOIN marks m ON m.student_id = s.id AND m.class = ? AND m.section = ?
+        WHERE s.class = ? AND s.section = ?
+        GROUP BY s.id
+        HAVING subjects > 0
+        ORDER BY avg_pct DESC
+        LIMIT 10
+      `);
+      leaderboard = stmt.all(className, section, className, section);
+    } else {
+      stmt = database.db.prepare(`
+        SELECT s.name, s.roll_number,
+          ROUND(AVG(m.marks_obtained * 100.0 / m.max_mark), 1) as avg_pct,
+          COUNT(m.id) as subjects
+        FROM students s
+        JOIN marks m ON m.student_id = s.id AND m.class = ? AND (m.section IS NULL OR m.section = '')
+        WHERE s.class = ? AND (s.section IS NULL OR s.section = '')
+        GROUP BY s.id
+        HAVING subjects > 0
+        ORDER BY avg_pct DESC
+        LIMIT 10
+      `);
+      leaderboard = stmt.all(className, className);
+    }
+
     res.json({ success: true, leaderboard });
   } catch (error) {
     console.error('Leaderboard error:', error);

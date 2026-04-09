@@ -24,10 +24,44 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
 // ==========================================
 let allStudents      = [];
 let filteredStudents = [];
+let allClasses       = [];     // Store all unique class names
 let reg = { slope: 0, intercept: 0, r: 0 };
 let scatterInstance  = null;
 let predInstance     = null;
 let activeTab        = 'overview';
+let currentBaseClass = 'All';  // Selected base class (e.g., "10")
+let currentSection   = 'All';  // Selected section (e.g., "A")
+
+// ==========================================
+// CLASS NAME PARSING HELPERS
+// Handles both "11-B" and "11B" formats
+// ==========================================
+function parseClassName(className) {
+    if (!className) return { base: '', section: '' };
+
+    // Check if it has a hyphen
+    if (className.includes('-')) {
+        const parts = className.split('-');
+        return { base: parts[0], section: parts[1] || '' };
+    }
+
+    // No hyphen - extract digits for base, letters for section
+    // Examples: "11B" -> base: "11", section: "B"
+    const match = className.match(/^(\d+)([a-zA-Z]*)$/);
+    if (match) {
+        return { base: match[1], section: match[2] || '' };
+    }
+
+    return { base: className, section: '' };
+}
+
+function getBaseClass(className) {
+    return parseClassName(className).base;
+}
+
+function getSection(className) {
+    return parseClassName(className).section;
+}
 
 // ==========================================
 // API HELPER
@@ -120,19 +154,73 @@ async function loadAnalytics() {
         return;
     }
 
-    // Populate class filter
-    const classes = ['All', ...new Set(allStudents.map(s => s.class).filter(Boolean).sort())];
-    const sel     = document.getElementById('classFilter');
-    const prev    = sel.value;
-    sel.innerHTML = classes.map(c => `<option value="${c}">${c}</option>`).join('');
-    if (classes.includes(prev)) sel.value = prev;
+    // Store all unique classes for section extraction
+    allClasses = [...new Set(allStudents.map(s => s.class).filter(Boolean))].sort();
+
+    // Populate base class filter (handles both "11-B" and "11B" formats)
+    const baseClasses = ['All', ...new Set(allClasses.map(c => getBaseClass(c)).filter(Boolean).sort())];
+    const sel = document.getElementById('classFilter');
+    const prev = sel.value;
+    sel.innerHTML = baseClasses.map(c => `<option value="${c}">${c === 'All' ? 'All classes' : 'Class ' + c}</option>`).join('');
+    if (baseClasses.includes(prev)) sel.value = prev;
+
+    // Update section dropdown based on selected class
+    updateSectionOptions();
 
     applyFilter();
 }
 
+function updateSectionOptions() {
+    const baseClass = document.getElementById('classFilter').value;
+    const sectionSel = document.getElementById('sectionFilter');
+
+    if (baseClass === 'All') {
+        sectionSel.innerHTML = '<option value="All">All sections</option>';
+        sectionSel.disabled = true;
+        currentSection = 'All';
+        return;
+    }
+
+    // Extract sections for this base class (handles both "11-B" and "11B" formats)
+    const sections = allClasses
+        .filter(c => getBaseClass(c) === baseClass)
+        .map(c => getSection(c))
+        .filter(v => v) // remove empty
+        .filter((v, i, a) => a.indexOf(v) === i) // unique
+        .sort();
+
+    const currentVal = sectionSel.value;
+    sectionSel.innerHTML = '<option value="All">All sections</option>' +
+        sections.map(s => `<option value="${s}">Section ${s}</option>`).join('');
+    sectionSel.disabled = false;
+
+    // Restore selection if possible
+    if (sections.includes(currentVal)) {
+        sectionSel.value = currentVal;
+    } else {
+        currentSection = 'All';
+    }
+}
+
 function applyFilter() {
-    const cls = document.getElementById('classFilter').value;
-    filteredStudents = cls === 'All' ? allStudents : allStudents.filter(s => s.class === cls);
+    const baseClass = document.getElementById('classFilter').value;
+    const section = document.getElementById('sectionFilter').value;
+    currentBaseClass = baseClass;
+    currentSection = section;
+
+    if (baseClass === 'All') {
+        // All classes, all sections
+        filteredStudents = allStudents;
+    } else if (section === 'All') {
+        // Specific base class, all sections (e.g., all 10th grade sections)
+        filteredStudents = allStudents.filter(s => s.class && getBaseClass(s.class) === baseClass);
+    } else {
+        // Specific section - match by base class AND section
+        filteredStudents = allStudents.filter(s => {
+            if (!s.class) return false;
+            return getBaseClass(s.class) === baseClass && getSection(s.class) === section;
+        });
+    }
 
     const atArr = filteredStudents.map(s => s.attendance);
     const scArr = filteredStudents.map(s => s.avg_score);
@@ -142,7 +230,12 @@ function applyFilter() {
     renderActiveTab();
 }
 
-document.getElementById('classFilter').addEventListener('change', applyFilter);
+document.getElementById('classFilter').addEventListener('change', () => {
+    updateSectionOptions();
+    applyFilter();
+});
+document.getElementById('sectionFilter').addEventListener('change', applyFilter);
+document.getElementById('viewModeFilter').addEventListener('change', applyFilter);
 
 // ==========================================
 // TAB SWITCHING
@@ -193,8 +286,21 @@ function renderOverview() {
     const avgSc  = Math.round(s.reduce((a, b) => a + b.avg_score,  0) / s.length);
     const atRisk = s.filter(st => st.attendance < 60 || st.avg_score < 50).length;
 
+    // Build filter label for display
+    let filterLabel = document.getElementById('classFilter').value;
+    if (filterLabel !== 'All') {
+        const section = document.getElementById('sectionFilter').value;
+        if (section !== 'All') {
+            filterLabel = `Class ${filterLabel}-${section}`;
+        } else {
+            filterLabel = `Class ${filterLabel} (all sections)`;
+        }
+    } else {
+        filterLabel = 'All classes';
+    }
+
     document.getElementById('overviewMetrics').innerHTML = `
-        ${mc('Students',      s.length, document.getElementById('classFilter').value)}
+        ${mc('Students',      s.length, filterLabel)}
         ${mc('Avg attendance', avgAtt + '%', 'this semester')}
         ${mc('Avg score',      avgSc  + '%', 'from marks table')}
         ${mc('At-risk',        atRisk, 'need intervention', atRisk > 0 ? '#A32D2D' : '#0F6E56')}
@@ -260,26 +366,36 @@ function renderOverview() {
         });
     }, 50);
 
+    // Show section column when viewing all sections of a base class
+    const showSectionCol = currentBaseClass !== 'All' && currentSection === 'All';
+
     document.getElementById('studentTableWrap').innerHTML = `
-        <div style="font-size:13px;font-weight:500;margin-bottom:10px;">Student records</div>
+        <div style="font-size:13px;font-weight:500;margin-bottom:10px;">Student records${showSectionCol ? ' (grouped by section)' : ''}</div>
         <div style="overflow-x:auto;">
         <table class="data-table">
             <thead><tr>
-                <th>Name</th><th>Class</th><th>Roll</th><th>Att %</th>
+                <th>Name</th>
+                ${showSectionCol ? '<th>Section</th>' : '<th>Class</th>'}
+                <th>Roll</th><th>Att %</th>
                 <th>Midterm</th><th>Final</th><th>Avg score</th><th>Grade</th>
             </tr></thead>
             <tbody>
-            ${s.map(st => `
+            ${s.map(st => {
+                const section = st.class ? st.class.split('-')[1] || '' : '';
+                return `
                 <tr>
                     <td><strong>${st.name}</strong></td>
-                    <td style="color:#888;">${st.class || '—'}</td>
+                    ${showSectionCol
+                        ? `<td><span style="background:#e3f2fd;padding:2px 8px;border-radius:4px;font-size:12px;">${section}</span></td>`
+                        : `<td style="color:#888;">${st.class || '—'}</td>`}
                     <td style="color:#888;">${st.roll_number || '—'}</td>
                     <td class="${attClass(st.attendance)}">${st.attendance}%</td>
                     <td>${st.midterm ? Math.round(st.midterm) + '%' : '—'}</td>
                     <td>${st.final_score ? Math.round(st.final_score) + '%' : '—'}</td>
                     <td><strong>${st.avg_score || 0}%</strong></td>
                     <td><span class="grade-pill grade-${st.grade || 'F'}">${st.grade || '—'}</span></td>
-                </tr>`).join('')}
+                </tr>`;
+            }).join('')}
             </tbody>
         </table>
         </div>
@@ -417,12 +533,18 @@ function renderRisk() {
                 ? 'Send attendance warning letter. Schedule teacher–student meeting.'
                 : 'Assign peer tutor. Weekly progress check-in.';
 
+        // Show section info in multi-section view
+        const section = st.class ? st.class.split('-')[1] || '' : '';
+        const classDisplay = currentBaseClass !== 'All' && currentSection === 'All' && section
+            ? `Sec ${section} · Roll ${st.roll_number || '—'}`
+            : `${st.class || '—'} · Roll ${st.roll_number || '—'}`;
+
         return `
         <div class="risk-card ${isCrit ? 'critical' : ''}">
             <div class="risk-header">
                 <div>
                     <div class="risk-name">${st.name}</div>
-                    <div class="risk-sub">${st.class || '—'} · Roll ${st.roll_number || '—'}</div>
+                    <div class="risk-sub">${classDisplay}</div>
                 </div>
                 <div class="risk-tags">
                     ${attRisk ? `<span class="tag tag-att">Att: ${st.attendance}%</span>` : ''}
@@ -523,8 +645,21 @@ function renderAISummary() {
     const avgSc  = Math.round(s.reduce((a, b) => a + b.avg_score,  0) / s.length);
     const atRisk = s.filter(st => st.attendance < 60 || st.avg_score < 50);
 
+    // Build class label for AI summary
+    let classLabel = document.getElementById('classFilter').value;
+    if (classLabel !== 'All') {
+        const section = document.getElementById('sectionFilter').value;
+        if (section !== 'All') {
+            classLabel = `${classLabel}-${section}`;
+        } else {
+            classLabel = `${classLabel} (all sections)`;
+        }
+    } else {
+        classLabel = 'All classes';
+    }
+
     document.getElementById('aiSummaryMetrics').innerHTML = `
-        ${mc('Class',     document.getElementById('classFilter').value)}
+        ${mc('Class',     classLabel)}
         ${mc('Pearson r', reg.r.toFixed(2), 'att ↔ score')}
         ${mc('At-risk',   atRisk.length, 'flagged')}
         ${mc('Avg score', avgSc + '%', 'class average')}
@@ -545,10 +680,21 @@ async function runAI() {
     const gDist  = ['A','B','C','D','F']
         .map(g => `${g}:${s.filter(st => st.grade === g).length}`)
         .join(', ');
-    const cls    = document.getElementById('classFilter').value;
+
+    // Build class label for AI summary
+    const baseClass = document.getElementById('classFilter').value;
+    const section = document.getElementById('sectionFilter').value;
+    let clsLabel = baseClass;
+    if (baseClass !== 'All' && section !== 'All') {
+        clsLabel = `${baseClass}-${section}`;
+    } else if (baseClass !== 'All') {
+        clsLabel = `${baseClass} (all sections)`;
+    } else {
+        clsLabel = 'All classes';
+    }
 
     const summary =
-`Class: ${cls}
+`Class: ${clsLabel}
 Students: ${s.length}
 Avg Attendance: ${avgAtt}%
 Avg Score: ${avgSc}%
@@ -569,7 +715,7 @@ At-risk students (${atRisk.length}): ${atRisk.map(st =>
             // BUG FIX #6: label now says Gemini, not Claude
             document.getElementById('aiOutput').innerHTML = `
                 <div class="ai-output">
-                    <div class="ai-output-title">Gemini's analysis</div>
+                    <div class="ai-output-title">Gemini's analysis for ${clsLabel}</div>
                     ${result.insight}
                 </div>`;
         } else {
