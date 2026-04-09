@@ -6,6 +6,11 @@ const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const crypto = require('crypto');
 const fetch = require('node-fetch');
+const helmet = require('helmet');
+const compression = require('compression');
+const rateLimit = require('express-rate-limit');
+const { body, validationResult } = require('express-validator');
+const csrf = require('csurf');
 const database = require('./database');
 const auth = require('./auth-middleware');
 
@@ -19,76 +24,100 @@ const app = express();
 const PORT = process.env.PORT || 8080;
 
 // ==========================================
-// RATE LIMITING (In-memory store with LRU eviction)
+// SECURITY MIDDLEWARE (IMP-005, IMP-008, IMP-009)
 // ==========================================
-const rateLimits = new Map();
-const RATE_LIMIT_WINDOW = 60000; // 1 minute
-const RATE_LIMIT_MAX = 100; // requests per window
-const RATE_LIMIT_MAP_MAX_SIZE = 10000; // Maximum entries to prevent memory leak
 
-function rateLimitMiddleware(req, res, next) {
-  const ip = req.ip || req.connection.remoteAddress;
-  const now = Date.now();
+// IMP-009: Secure Header Configuration with Helmet
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'", "'unsafe-inline'", "cdnjs.cloudflare.com", "cdn.jsdelivr.net"],
+      styleSrc: ["'self'", "'unsafe-inline'", "fonts.googleapis.com", "cdnjs.cloudflare.com"],
+      fontSrc: ["'self'", "fonts.gstatic.com", "cdnjs.cloudflare.com"],
+      imgSrc: ["'self'", "data:", "blob:"],
+      connectSrc: ["'self'", "generativelanguage.googleapis.com"],
+    },
+  },
+  hsts: {
+    maxAge: 31536000,
+    includeSubDomains: true,
+    preload: true
+  },
+  referrerPolicy: { policy: 'same-origin' }
+}));
 
-  // Evict oldest entries if map is too large (LRU approximation)
-  if (rateLimits.size >= RATE_LIMIT_MAP_MAX_SIZE) {
-    const entriesToDelete = Math.floor(RATE_LIMIT_MAP_MAX_SIZE * 0.1); // Delete 10% of oldest
-    let deleted = 0;
-    for (const [key, value] of rateLimits.entries()) {
-      if (deleted >= entriesToDelete) break;
-      if (now > value.resetTime) {
-        rateLimits.delete(key);
-        deleted++;
-      }
-    }
-    // If still too large, delete oldest entries by insertion order
-    if (rateLimits.size >= RATE_LIMIT_MAP_MAX_SIZE) {
-      let count = 0;
-      for (const key of rateLimits.keys()) {
-        if (count >= entriesToDelete) break;
-        rateLimits.delete(key);
-        count++;
-      }
-    }
+// OPT-010: Compression middleware for response optimization
+app.use(compression({
+  filter: (req, res) => {
+    if (req.headers['x-no-compression']) return false;
+    return compression.filter(req, res);
   }
+}));
 
-  if (!rateLimits.has(ip)) {
-    rateLimits.set(ip, { count: 1, resetTime: now + RATE_LIMIT_WINDOW });
-    return next();
+// IMP-008: Rate Limiting by Endpoint
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 5, // 5 attempts per window
+  message: {
+    success: false,
+    message: 'Too many login attempts, please try again later'
+  },
+  standardHeaders: true,
+  legacyHeaders: false
+});
+
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 100, // 100 requests per minute
+  message: {
+    success: false,
+    message: 'Rate limit exceeded. Please try again later.'
   }
+});
 
-  const limit = rateLimits.get(ip);
-
-  if (now > limit.resetTime) {
-    limit.count = 1;
-    limit.resetTime = now + RATE_LIMIT_WINDOW;
-    return next();
+const rfidLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 60, // 60 RFID scans per minute
+  message: {
+    success: false,
+    message: 'RFID scan rate limit exceeded'
   }
+});
 
-  if (limit.count >= RATE_LIMIT_MAX) {
-    return res.status(429).json({
+// IMP-006: CSRF Protection
+const csrfProtection = csrf({ cookie: true });
+
+// IMP-007: Input Sanitization Middleware
+const handleValidationErrors = (req, res, next) => {
+  const errors = validationResult(req);
+  if (!errors.isEmpty()) {
+    return res.status(400).json({
       success: false,
-      message: 'Rate limit exceeded. Please try again later.'
+      message: 'Validation failed',
+      errors: errors.array()
     });
   }
-
-  limit.count++;
   next();
-}
+};
 
-// Clean up expired rate limit entries periodically
-setInterval(() => {
-  const now = Date.now();
-  const expired = [];
-  for (const [ip, limit] of rateLimits.entries()) {
-    if (now > limit.resetTime) {
-      expired.push(ip);
-    }
-  }
-  for (const ip of expired) {
-    rateLimits.delete(ip);
-  }
-}, RATE_LIMIT_WINDOW);
+// Validation rules for common endpoints
+const studentValidation = [
+  body('cardId').trim().isLength({ min: 3, max: 100 }).escape(),
+  body('name').trim().isLength({ min: 1, max: 200 }).escape(),
+  body('studentClass').optional().trim().escape(),
+  body('section').optional().trim().escape(),
+  body('rollNumber').optional().trim().escape(),
+  handleValidationErrors
+];
+
+const teacherValidation = [
+  body('username').trim().isLength({ min: 3, max: 50 }).escape(),
+  body('password').trim().isLength({ min: 4, max: 100 }),
+  body('name').trim().isLength({ min: 1, max: 200 }).escape(),
+  body('email').trim().isEmail().normalizeEmail(),
+  handleValidationErrors
+];
 
 // ==========================================
 // MIDDLEWARE SETUP
@@ -97,11 +126,16 @@ setInterval(() => {
 // ==========================================
 // CORS CONFIGURATION
 // ==========================================
-// For production, replace origin with specific domains:
-// origin: ['https://yourdomain.com', 'https://admin.yourdomain.com']
+// OPT-011: Fixed CORS origin validation to properly handle empty ALLOWED_ORIGINS
+// For production, set ALLOWED_ORIGINS env var to comma-separated domains:
+//   ALLOWED_ORIGINS=https://yourdomain.com,https://admin.yourdomain.com
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+  ? process.env.ALLOWED_ORIGINS.split(',').filter(Boolean)
+  : [];
+
 app.use(cors({
   origin: process.env.NODE_ENV === 'production'
-    ? (process.env.ALLOWED_ORIGINS || '').split(',')
+    ? (allowedOrigins.length > 0 ? allowedOrigins : false)
     : true,
   credentials: true
 }));
@@ -137,7 +171,8 @@ app.use((req, res, next) => {
  * Replace the existing /auth/login endpoint in app.js with this
  */
 
-app.post('/auth/login', (req, res) => {
+// IMP-008: Apply login rate limiter
+app.post('/auth/login', loginLimiter, async (req, res) => {
   try {
     const { username, password } = req.body;
 
@@ -157,7 +192,8 @@ app.post('/auth/login', (req, res) => {
       });
     }
 
-    const isValidPassword = database.teachers.verifyPassword(password, teacher.password_hash);
+    // OPT-002: Using async bcrypt to prevent event loop blocking
+    const isValidPassword = await database.teachers.verifyPassword(password, teacher.password_hash);
 
     if (!isValidPassword) {
       return res.status(401).json({
@@ -166,7 +202,15 @@ app.post('/auth/login', (req, res) => {
       });
     }
 
-    // Create session
+    // SECURITY FIX: Prevent session fixation attack
+    // 1. Check for any existing session ID from the request
+    const existingSessionId = req.cookies?.sessionId || req.headers['x-session-id'];
+    if (existingSessionId) {
+      // Delete the old session to prevent fixation
+      database.sessions.delete(existingSessionId);
+    }
+
+    // 2. Generate a completely new session ID for the authenticated user
     const sessionId = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
@@ -180,14 +224,20 @@ app.post('/auth/login', (req, res) => {
     const ctAssignments = allAssignments.filter(a => a.is_class_teacher);
     const stAssignments = allAssignments.filter(a => !a.is_class_teacher);
 
+    // SECURITY FIX: Clear any existing session cookie before setting new one
+    // This prevents session fixation attacks
+    res.clearCookie('sessionId');
+
+    // SECURITY: Set secure session cookie with additional protections
     res.cookie('sessionId', sessionId, {
-      httpOnly: true,
-      maxAge: 24 * 60 * 60 * 1000
+      httpOnly: true,      // Prevents JavaScript access
+      secure: process.env.NODE_ENV === 'production', // HTTPS only in production
+      sameSite: 'strict',  // Prevents CSRF via cross-site requests
+      maxAge: 24 * 60 * 60 * 1000 // 24 hours
     });
 
-    console.log(`✓ User logged in: ${teacher.username} (${teacher.role})`);
-    console.log(`  CT of: ${ctAssignments.map(a => a.class_name).join(', ') || 'None'}`);
-    console.log(`  ST of: ${stAssignments.map(a => a.class_name).join(', ') || 'None'}`);
+    // SECURITY: Log minimal info (no sensitive data)
+    console.log(`✓ User logged in: ID ${teacher.id} (${teacher.role})`);
 
     res.json({
       success: true,
@@ -223,7 +273,7 @@ app.post('/auth/login', (req, res) => {
  * POST /auth/logout
  * Logout endpoint
  */
-app.post('/auth/logout', auth.isAuthenticated, (req, res) => {
+app.post('/auth/logout', auth.isAuthenticated, csrfProtection, (req, res) => {
   try {
     const sessionId = req.headers['x-session-id'] || req.cookies?.sessionId;
     
@@ -274,6 +324,17 @@ app.get('/auth/me', auth.isAuthenticated, (req, res) => {
   }
 });
 
+/**
+ * GET /auth/csrf-token
+ * Get CSRF token for frontend forms (IMP-006)
+ */
+app.get('/auth/csrf-token', csrfProtection, (req, res) => {
+  res.json({
+    success: true,
+    csrfToken: req.csrfToken()
+  });
+});
+
 // ==========================================
 // ADMIN ENDPOINTS - TEACHER MANAGEMENT
 // ==========================================
@@ -282,7 +343,8 @@ app.get('/auth/me', auth.isAuthenticated, (req, res) => {
  * Create new teacher (Admin only)
  * FIXED: Accept 'teacher' role and validate properly
  */
-app.post('/admin/teachers', auth.isAuthenticated, auth.isAdmin, (req, res) => {
+// IMP-007: Apply input validation and CSRF protection
+app.post('/admin/teachers', auth.isAuthenticated, auth.isAdmin, csrfProtection, teacherValidation, async (req, res) => {
   try {
     const { username, password, name, email, role } = req.body;
 
@@ -314,9 +376,10 @@ app.post('/admin/teachers', auth.isAuthenticated, auth.isAdmin, (req, res) => {
       });
     }
 
-    const result = database.teachers.create(username, password, name, email, teacherRole);
+    const result = await database.teachers.create(username, password, name, email, teacherRole);
 
-    console.log(`✓ Teacher created: ${username} (${teacherRole})`);
+    // SECURITY: Log minimal info (no PII)
+    console.log(`✓ Teacher created: ID ${result.lastInsertRowid} (${teacherRole})`);
 
     res.status(201).json({
       success: true,
@@ -371,10 +434,35 @@ app.get('/admin/teachers', auth.isAuthenticated, auth.isAdmin, (req, res) => {
 });
 
 /**
+ * GET /admin/teachers/paginated
+ * Get paginated teachers list (Admin only) - IMP-003
+ * Query params: page (default: 1), limit (default: 50)
+ */
+app.get('/admin/teachers/paginated', auth.isAuthenticated, auth.isAdmin, (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const result = database.teachers.getPaginated(page, limit);
+
+    res.json({
+      success: true,
+      data: result.data,
+      pagination: result.pagination
+    });
+  } catch (error) {
+    console.error('Get paginated teachers error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch teachers'
+    });
+  }
+});
+
+/**
  * PUT /admin/teachers/:id
  * Update teacher (Admin only)
  */
-app.put('/admin/teachers/:id', auth.isAuthenticated, auth.isAdmin, (req, res) => {
+app.put('/admin/teachers/:id', auth.isAuthenticated, auth.isAdmin, csrfProtection, (req, res) => {
   try {
     const teacherId = parseInt(req.params.id);
     const { name, email, role } = req.body;
@@ -412,7 +500,7 @@ app.put('/admin/teachers/:id', auth.isAuthenticated, auth.isAdmin, (req, res) =>
  * POST /admin/teachers/:id/reset-password
  * Reset teacher password (Admin only)
  */
-app.post('/admin/teachers/:id/reset-password', auth.isAuthenticated, auth.isAdmin, (req, res) => {
+app.post('/admin/teachers/:id/reset-password', auth.isAuthenticated, auth.isAdmin, csrfProtection, async (req, res) => {
   try {
     const teacherId = parseInt(req.params.id);
     const { newPassword } = req.body;
@@ -432,9 +520,10 @@ app.post('/admin/teachers/:id/reset-password', auth.isAuthenticated, auth.isAdmi
       });
     }
 
-    database.teachers.updatePassword(teacherId, newPassword);
+    await database.teachers.updatePassword(teacherId, newPassword);
 
-    console.log(`✓ Password reset for teacher: ${teacher.username}`);
+    // SECURITY: Log minimal info (no PII)
+    console.log(`✓ Password reset for teacher ID: ${teacherId}`);
 
     res.json({
       success: true,
@@ -454,7 +543,7 @@ app.post('/admin/teachers/:id/reset-password', auth.isAuthenticated, auth.isAdmi
  * DELETE /admin/teachers/:id
  * Delete teacher (Admin only)
  */
-app.delete('/admin/teachers/:id', auth.isAuthenticated, auth.isAdmin, (req, res) => {
+app.delete('/admin/teachers/:id', auth.isAuthenticated, auth.isAdmin, csrfProtection, (req, res) => {
   try {
     const teacherId = parseInt(req.params.id);
 
@@ -497,7 +586,7 @@ app.delete('/admin/teachers/:id', auth.isAuthenticated, auth.isAdmin, (req, res)
  * Assign teacher to class with CT/ST validation
  * Note: Teachers are created with role='teacher', CT/ST is determined by assignments
  */
-app.post('/admin/assign-class', auth.isAuthenticated, auth.isAdmin, (req, res) => {
+app.post('/admin/assign-class', auth.isAuthenticated, auth.isAdmin, csrfProtection, (req, res) => {
   try {
     const { teacherId, className, section, isClassTeacher } = req.body;
 
@@ -565,7 +654,8 @@ app.post('/admin/assign-class', auth.isAuthenticated, auth.isAdmin, (req, res) =
 
     const assignmentType = isClassTeacher ? 'Class Teacher' : 'Subject Teacher';
     const fullClassName = section ? `${className}-${section}` : className;
-    console.log(`✓ Teacher ${teacherId} assigned to ${fullClassName} as ${assignmentType}`);
+    // SECURITY: Log action without sensitive details
+    console.log(`✓ Teacher ${teacherId} assigned to class`);
 
     res.json({
       success: true,
@@ -584,7 +674,7 @@ app.post('/admin/assign-class', auth.isAuthenticated, auth.isAdmin, (req, res) =
  * DELETE /admin/assign-class
  * Remove teacher from class (Admin only)
  */
-app.delete('/admin/assign-class', auth.isAuthenticated, auth.isAdmin, (req, res) => {
+app.delete('/admin/assign-class', auth.isAuthenticated, auth.isAdmin, csrfProtection, (req, res) => {
   try {
     const { teacherId, className, section } = req.body;
 
@@ -598,7 +688,8 @@ app.delete('/admin/assign-class', auth.isAuthenticated, auth.isAdmin, (req, res)
     database.teacherClasses.remove(teacherId, className, section || null);
 
     const fullClassName = section ? `${className}-${section}` : className;
-    console.log(`✓ Teacher ${teacherId} removed from ${fullClassName}`);
+    // SECURITY: Log action without sensitive details
+    console.log(`✓ Teacher ${teacherId} removed from class`);
 
     res.json({
       success: true,
@@ -646,7 +737,8 @@ app.get('/admin/class-assignments', auth.isAuthenticated, auth.isAdmin, (req, re
  * Record attendance from ESP8266 RFID reader
  * Rate limited to prevent spam
  */
-app.post('/api/rfid/scan', rateLimitMiddleware, (req, res) => {
+// IMP-008: Apply specific RFID rate limiter
+app.post('/api/rfid/scan', rfidLimiter, (req, res) => {
   try {
     const { cardId, apiKey } = req.body;
 
@@ -669,13 +761,15 @@ app.post('/api/rfid/scan', rateLimitMiddleware, (req, res) => {
     const timestamp = new Date().toISOString();
     const trimmedCardId = cardId.trim().toUpperCase().slice(0, 50);
     
-    console.log(`📱 ESP8266 scan - Card: "${trimmedCardId}"`);
+    // SECURITY: Don't log card IDs (sensitive)
+    console.log(`📱 ESP8266 scan received`);
 
     // Look up student by card ID
     const student = database.students.getByCardId(trimmedCardId);
 
     if (!student) {
-      console.log(`⚠️  Unknown card: ${trimmedCardId}`);
+      // SECURITY: Don't log card IDs (sensitive)
+      console.log(`⚠️  Unknown card scanned`);
 
       // Still record attendance even if student not registered
       const result = database.attendance.record(
@@ -710,7 +804,8 @@ app.post('/api/rfid/scan', rateLimitMiddleware, (req, res) => {
       timestamp
     );
 
-    console.log(`✓ Attendance recorded: ${student.name} (Class: ${student.class}, Section: ${student.section})`);
+    // SECURITY: Log without PII
+    console.log(`✓ Attendance recorded: Student ID ${student.id}`);
 
     res.json({
       success: true,
@@ -776,7 +871,8 @@ app.post('/attendance', auth.isAuthenticated, auth.canMarkAttendance, (req, res)
     const timestamp = time || new Date().toISOString();
     const trimmedCardId = cardId.trim().toUpperCase().slice(0, 50);
     
-    console.log(`📝 Attendance request for card: "${trimmedCardId}"`);
+    // SECURITY: Don't log card IDs
+    console.log(`📝 Attendance request received`);
 
     const student = database.students.getByCardId(trimmedCardId);
 
@@ -789,13 +885,8 @@ app.post('/attendance', auth.isAuthenticated, auth.canMarkAttendance, (req, res)
       timestamp
     );
 
-    console.log('✓ Attendance recorded:', {
-      id: result.lastInsertRowid,
-      cardId: trimmedCardId,
-      student: student ? student.name : 'Unknown',
-      class: student ? student.class : 'N/A',
-      section: student ? student.section : null
-    });
+    // SECURITY: Log without PII
+    console.log('✓ Attendance recorded for student ID:', student ? student.id : 'unknown');
 
     res.status(201).json({
       success: true,
@@ -946,10 +1037,35 @@ app.get('/attendance/latest', auth.isAuthenticated, auth.isAdmin, (req, res) => 
 });
 
 /**
+ * GET /attendance/paginated
+ * Get paginated attendance records (Admin only) - IMP-003
+ * Query params: page (default: 1), limit (default: 50)
+ */
+app.get('/attendance/paginated', auth.isAuthenticated, auth.isAdmin, (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const result = database.attendance.getPaginated(page, limit);
+
+    res.json({
+      success: true,
+      data: result.data,
+      pagination: result.pagination
+    });
+  } catch (error) {
+    console.error('Get paginated attendance error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch attendance'
+    });
+  }
+});
+
+/**
  * DELETE /attendance/clear
  * Clear all attendance (Admin only)
  */
-app.delete('/attendance/clear', auth.isAuthenticated, auth.isAdmin, (req, res) => {
+app.delete('/attendance/clear', auth.isAuthenticated, auth.isAdmin, csrfProtection, (req, res) => {
   try {
     const result = database.attendance.clearAll();
 
@@ -977,7 +1093,8 @@ app.delete('/attendance/clear', auth.isAuthenticated, auth.isAdmin, (req, res) =
  * POST /students/register
  * Register new student (Admin and Class Teachers)
  */
-app.post('/students/register', auth.isAuthenticated, auth.isClassTeacher, (req, res) => {
+// IMP-007: Apply input validation
+app.post('/students/register', auth.isAuthenticated, auth.isClassTeacher, studentValidation, (req, res) => {
   try {
     const { cardId, name, studentClass, section, rollNumber } = req.body;
 
@@ -1066,6 +1183,31 @@ app.get('/students', auth.isAuthenticated, (req, res) => {
 });
 
 /**
+ * GET /students/paginated
+ * Get paginated students list (Authenticated users) - IMP-003
+ * Query params: page (default: 1), limit (default: 50)
+ */
+app.get('/students/paginated', auth.isAuthenticated, (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const result = database.students.getPaginated(page, limit);
+
+    res.json({
+      success: true,
+      data: result.data,
+      pagination: result.pagination
+    });
+  } catch (error) {
+    console.error('Get paginated students error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch students'
+    });
+  }
+});
+
+/**
  * GET /students/class/:className
  * Get students by class
  * Query params: section (optional)
@@ -1099,21 +1241,23 @@ app.get('/students/class/:className', auth.isAuthenticated, auth.hasClassAccess,
 /**
  * GET /admin/students
  * Get all students with full details (Admin only)
+ * OPT-003: Fixed N+1 query - now uses single batch query for all stats
  */
 app.get('/admin/students', auth.isAuthenticated, auth.isAdmin, (req, res) => {
   try {
     const students = database.students.getAll();
-    
-    // Get attendance count for each student
+
+    // OPT-003: Get all attendance stats in a single query (was N+1)
+    const attendanceStats = database.attendance.getStatsForAllStudents();
+
+    // Map stats to students in-memory (O(n) instead of O(n) queries)
     const studentsWithStats = students.map(student => {
-      const attendanceCount = database.attendance.getCountByStudent(student.id);
-      const lastAttendance = database.attendance.getLastByStudent(student.id);
-      
+      const stats = attendanceStats.get(student.id);
       return {
         ...student,
         stats: {
-          totalAttendance: attendanceCount,
-          lastSeen: lastAttendance ? lastAttendance.timestamp : null
+          totalAttendance: stats ? stats.totalAttendance : 0,
+          lastSeen: stats ? stats.lastSeen : null
         }
       };
     });
@@ -1177,7 +1321,7 @@ app.get('/admin/students/:id', auth.isAuthenticated, auth.isAdmin, (req, res) =>
  * PUT /admin/students/:id
  * Update student details (Admin only)
  */
-app.put('/admin/students/:id', auth.isAuthenticated, auth.isAdmin, (req, res) => {
+app.put('/admin/students/:id', auth.isAuthenticated, auth.isAdmin, csrfProtection, async (req, res) => {
   try {
     const studentId = parseInt(req.params.id);
     const { cardId, name, studentClass, section, rollNumber } = req.body;
@@ -1210,7 +1354,7 @@ app.put('/admin/students/:id', auth.isAuthenticated, auth.isAdmin, (req, res) =>
     }
 
     // Update student
-    database.students.update(
+    await database.students.update(
       studentId,
       cardId || existingStudent.card_id,
       name,
@@ -1247,7 +1391,7 @@ app.put('/admin/students/:id', auth.isAuthenticated, auth.isAdmin, (req, res) =>
  * DELETE /admin/students/:id
  * Delete student (Admin only)
  */
-app.delete('/admin/students/:id', auth.isAuthenticated, auth.isAdmin, (req, res) => {
+app.delete('/admin/students/:id', auth.isAuthenticated, auth.isAdmin, csrfProtection, (req, res) => {
   try {
     const studentId = parseInt(req.params.id);
 
@@ -1269,7 +1413,8 @@ app.delete('/admin/students/:id', auth.isAuthenticated, auth.isAdmin, (req, res)
       });
     }
 
-    console.log(`✓ Student deleted: ${student.name} (ID: ${studentId})`);
+    // SECURITY: Log without PII
+    console.log(`✓ Student deleted: ID ${studentId}`);
 
     res.json({
       success: true,
@@ -1289,7 +1434,7 @@ app.delete('/admin/students/:id', auth.isAuthenticated, auth.isAdmin, (req, res)
  * POST /api/student/reset-password
  * Reset student password (Admin only)
  */
-app.post('/api/student/reset-password', auth.isAuthenticated, auth.isAdmin, (req, res) => {
+app.post('/api/student/reset-password', auth.isAuthenticated, auth.isAdmin, csrfProtection, async (req, res) => {
   try {
     const { studentId, newPassword } = req.body;
 
@@ -1315,9 +1460,10 @@ app.post('/api/student/reset-password', auth.isAuthenticated, auth.isAdmin, (req
       });
     }
 
-    database.students.updatePassword(studentId, newPassword);
+    await database.students.updatePassword(studentId, newPassword);
 
-    console.log(`✓ Password reset for student: ${student.name}`);
+    // SECURITY: Log without PII
+    console.log(`✓ Password reset for student ID: ${studentId}`);
 
     res.json({
       success: true,
@@ -1337,7 +1483,7 @@ app.post('/api/student/reset-password', auth.isAuthenticated, auth.isAdmin, (req
  * POST /admin/students/bulk-import
  * Bulk import students from CSV data (Admin only)
  */
-app.post('/admin/students/bulk-import', auth.isAuthenticated, auth.isAdmin, (req, res) => {
+app.post('/admin/students/bulk-import', auth.isAuthenticated, auth.isAdmin, csrfProtection, (req, res) => {
   try {
     const { students } = req.body; // Array of {cardId, name, class, section, rollNumber}
 
@@ -1354,6 +1500,25 @@ app.post('/admin/students/bulk-import', auth.isAuthenticated, auth.isAdmin, (req
       errors: []
     };
 
+    // SECURITY: Sanitize string inputs to prevent CSV/formula injection
+    const sanitizeString = (str, maxLength = 200) => {
+      if (str == null) return null;
+      let sanitized = String(str).slice(0, maxLength);
+      // Remove formula injection characters at start
+      sanitized = sanitized.replace(/^[=+\-@\t\r\n]+/, '');
+      // Remove null bytes and control characters
+      sanitized = sanitized.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+      return sanitized.trim();
+    };
+
+    // SECURITY: Validate card ID format
+    const isValidCardId = (id) => {
+      return typeof id === 'string' &&
+             id.length >= 3 &&
+             id.length <= 100 &&
+             /^[\w\-\s]+$/.test(id); // Allow alphanumeric, hyphen, underscore, space
+    };
+
     students.forEach((student, index) => {
       try {
         // Validate student is an object
@@ -1366,23 +1531,31 @@ app.post('/admin/students/bulk-import', auth.isAuthenticated, auth.isAdmin, (req
           return;
         }
 
-        const { cardId, name, studentClass, section, rollNumber } = student;
+        let { cardId, name, studentClass, section, rollNumber } = student;
 
-        if (!cardId || !name) {
+        // SECURITY: Validate cardId format
+        if (!cardId || !name || !isValidCardId(cardId)) {
           results.failed++;
           results.errors.push({
             row: index + 1,
-            error: 'Missing cardId or name'
+            error: 'Missing or invalid cardId or name'
           });
           return;
         }
+
+        // SECURITY: Sanitize all string inputs
+        cardId = sanitizeString(cardId, 100);
+        name = sanitizeString(name, 200);
+        studentClass = sanitizeString(studentClass, 50);
+        section = sanitizeString(section, 50);
+        rollNumber = sanitizeString(rollNumber, 50);
 
         // Check if card already exists
         if (database.students.cardExists(cardId)) {
           results.failed++;
           results.errors.push({
             row: index + 1,
-            cardId,
+            cardId: cardId.slice(0, 20), // Limit cardId in error message
             error: 'Card ID already registered'
           });
           return;
@@ -1392,19 +1565,21 @@ app.post('/admin/students/bulk-import', auth.isAuthenticated, auth.isAdmin, (req
         database.students.register(
           cardId,
           name,
-          studentClass || null,
-          section || null,
-          rollNumber || null
+          studentClass,
+          section,
+          rollNumber
         );
 
         results.success++;
 
       } catch (error) {
         results.failed++;
+        // SECURITY: Don't expose internal error details
         results.errors.push({
           row: index + 1,
-          error: error.message
+          error: 'Failed to import student'
         });
+        console.error('Import error for row', index + 1, error);
       }
     });
 
@@ -1471,37 +1646,37 @@ app.get('/health', (req, res) => {
  * GET /api/analytics/students
  * Returns all students with attendance % and grades for ML dashboard.
  * Attendance % = (days present / total school days recorded) × 100
- * Uses the attendance table to compute the real count per student.
+ * OPT-004: Fixed N+1 queries - now uses batch queries
  */
 app.get('/api/analytics/students/v2', auth.isAuthenticated, (req, res) => {
   try {
     const students = database.students.getAll();
 
+    // OPT-004: Get total days in one query
     const totalDaysStmt = database.db.prepare(
       `SELECT COUNT(DISTINCT DATE(timestamp)) as total_days FROM attendance`
     );
     const { total_days } = totalDaysStmt.get();
 
+    // OPT-004: Batch get present days for ALL students in one query (was N+1)
+    const presentDaysMap = database.attendance.getPresentDaysForAllStudents();
+
+    // OPT-004: Batch get marks for ALL students in one query (was N+1)
+    const marksMap = database.marks.getAllStats();
+
+    // Map results in-memory (O(n) instead of O(n) database queries)
     const result = students.map(student => {
-      const { present_days } = database.db.prepare(
-        `SELECT COUNT(DISTINCT DATE(timestamp)) as present_days FROM attendance WHERE student_id = ?`
-      ).get(student.id);
+      const present_days = presentDaysMap.get(student.id) || 0;
 
       // Calculate attendance only if there are school days recorded
       const attendance = total_days > 0
         ? Math.round((present_days / total_days) * 100)
-        : 0; // No school days recorded = 0% attendance
+        : 0;
 
-      // Pull actual marks from marks table
-      const marksRow = database.db.prepare(`
-        SELECT
-          ROUND(AVG(CASE WHEN exam_type='midterm' THEN marks_obtained*100.0/max_mark END)) as midterm_pct,
-          ROUND(AVG(CASE WHEN exam_type='final'   THEN marks_obtained*100.0/max_mark END)) as final_pct,
-          ROUND(AVG(marks_obtained*100.0/max_mark))                                         as avg_score
-        FROM marks WHERE student_id = ?
-      `).get(student.id);
+      // Get pre-computed marks stats
+      const marksRow = marksMap.get(student.id) || { midterm_pct: 0, final_pct: 0, avg_score: 0 };
 
-      const avg_score = marksRow?.avg_score || 0;
+      const avg_score = marksRow.avg_score;
       let grade = null;
       if (avg_score >= 90) grade = 'A';
       else if (avg_score >= 75) grade = 'B';
@@ -1513,8 +1688,8 @@ app.get('/api/analytics/students/v2', auth.isAuthenticated, (req, res) => {
         id: student.id, name: student.name,
         class: student.class, roll_number: student.roll_number,
         attendance, present_days, total_days,
-        midterm: marksRow?.midterm_pct || 0,
-        final_score: marksRow?.final_pct || 0,
+        midterm: marksRow.midterm_pct,
+        final_score: marksRow.final_pct,
         avg_score, grade
       };
     });
@@ -1534,12 +1709,20 @@ app.get('/api/analytics/students/v2', auth.isAuthenticated, (req, res) => {
  * NOTE: This endpoint adds midterm / final_score / grade columns to the
  * students table if they don't exist yet (safe migration).
  */
-app.post('/api/analytics/import-grades', auth.isAuthenticated, auth.isAdmin, (req, res) => {
+app.post('/api/analytics/import-grades', auth.isAuthenticated, auth.isAdmin, csrfProtection, (req, res) => {
   try {
+    // SECURITY: Whitelist of allowed column names to prevent SQL injection
+    const ALLOWED_COLUMNS = {
+      'midterm': 'INTEGER',
+      'final_score': 'INTEGER',
+      'grade': 'TEXT'
+    };
+
     // Safe-add grade columns to students table (idempotent)
-    ['midterm', 'final_score', 'grade'].forEach(col => {
+    Object.entries(ALLOWED_COLUMNS).forEach(([col, type]) => {
       try {
-        database.db.exec(`ALTER TABLE students ADD COLUMN ${col} ${col === 'grade' ? 'TEXT' : 'INTEGER'}`);
+        // Column name is from whitelist, safe to use in SQL
+        database.db.exec(`ALTER TABLE students ADD COLUMN ${col} ${type}`);
       } catch (_) { /* column already exists — that's fine */ }
     });
  
@@ -1553,10 +1736,34 @@ app.post('/api/analytics/import-grades', auth.isAuthenticated, auth.isAdmin, (re
       WHERE roll_number = ?
     `);
  
+    // SECURITY: Validation helper to prevent CSV/formula injection
+    const sanitizeGradeInput = (value, maxLength = 10) => {
+      if (value == null) return null;
+      const str = String(value).slice(0, maxLength);
+      // Prevent formula injection by removing =, +, -, @, \t, \r, \n at start
+      return str.replace(/^[=+\-@\t\r\n]+/, '');
+    };
+
+    // SECURITY: Validate roll numbers
+    const isValidRollNumber = (rn) => {
+      return typeof rn === 'string' && rn.length >= 1 && rn.length <= 50;
+    };
+
     let updated = 0;
     const doAll = database.db.transaction(() => {
       grades.forEach(({ rollNumber, midterm, finalScore, grade }) => {
-        const info = updateStmt.run(midterm || 0, finalScore || 0, grade || null, String(rollNumber));
+        // SECURITY: Validate roll number
+        if (!isValidRollNumber(String(rollNumber))) {
+          console.warn('Invalid roll number skipped:', rollNumber);
+          return;
+        }
+
+        // SECURITY: Sanitize grade values
+        const sanitizedGrade = sanitizeGradeInput(grade);
+        const sanitizedMidterm = Math.min(100, Math.max(0, parseInt(midterm) || 0));
+        const sanitizedFinal = Math.min(100, Math.max(0, parseInt(finalScore) || 0));
+
+        const info = updateStmt.run(sanitizedMidterm, sanitizedFinal, sanitizedGrade, String(rollNumber));
         if (info.changes > 0) updated++;
       });
     });
@@ -1566,7 +1773,9 @@ app.post('/api/analytics/import-grades', auth.isAuthenticated, auth.isAdmin, (re
     res.json({ success: true, updated });
   } catch (error) {
     console.error('Grade import error:', error);
-    res.status(500).json({ success: false, message: 'Import failed: ' + error.message });
+    // SECURITY: Don't expose internal error details to client
+    console.error('Import error:', error);
+    res.status(500).json({ success: false, message: 'Import failed' });
   }
 });
  
@@ -1615,7 +1824,9 @@ app.post('/api/analytics/ai-insight', auth.isAuthenticated, asyncHandler(async (
     const data = await response.json();
 
     if (data.error) {
-      return res.status(500).json({ success: false, message: data.error.message });
+      // SECURITY: Log error internally, don't expose to client
+      console.error('Gemini API error:', data.error);
+      return res.status(500).json({ success: false, message: 'AI analysis failed' });
     }
 
     // Extract text from Gemini response
@@ -1669,6 +1880,65 @@ const deleteMarkRecord = database.db.prepare(`
   DELETE FROM marks WHERE student_id = ? AND subject = ? AND exam_type = ?
 `);
 
+// OPT-007: Cached prepared statements for analytics routes
+const getDistinctClasses = database.db.prepare(`
+  SELECT DISTINCT class FROM students WHERE class IS NOT NULL ORDER BY class
+`);
+
+const getMarksSummaryWithSection = database.db.prepare(`
+  SELECT
+    s.id, s.name, s.roll_number,
+    AVG(CASE WHEN m.exam_type = 'midterm' THEN (m.marks_obtained * 100.0 / m.max_mark) END) as midterm_pct,
+    AVG(CASE WHEN m.exam_type = 'final'   THEN (m.marks_obtained * 100.0 / m.max_mark) END) as final_pct,
+    AVG(m.marks_obtained * 100.0 / m.max_mark) as overall_pct,
+    COUNT(m.id) as subjects_entered
+  FROM students s
+  LEFT JOIN marks m ON m.student_id = s.id AND m.class = ? AND m.section = ?
+  WHERE s.class = ? AND s.section = ?
+  GROUP BY s.id
+  ORDER BY s.roll_number
+`);
+
+const getMarksSummaryWithoutSection = database.db.prepare(`
+  SELECT
+    s.id, s.name, s.roll_number,
+    AVG(CASE WHEN m.exam_type = 'midterm' THEN (m.marks_obtained * 100.0 / m.max_mark) END) as midterm_pct,
+    AVG(CASE WHEN m.exam_type = 'final'   THEN (m.marks_obtained * 100.0 / m.max_mark) END) as final_pct,
+    AVG(m.marks_obtained * 100.0 / m.max_mark) as overall_pct,
+    COUNT(m.id) as subjects_entered
+  FROM students s
+  LEFT JOIN marks m ON m.student_id = s.id AND m.class = ? AND (m.section IS NULL OR m.section = '')
+  WHERE s.class = ? AND (s.section IS NULL OR s.section = '')
+  GROUP BY s.id
+  ORDER BY s.roll_number
+`);
+
+const getLeaderboardWithSection = database.db.prepare(`
+  SELECT s.name, s.roll_number,
+    ROUND(AVG(m.marks_obtained * 100.0 / m.max_mark), 1) as avg_pct,
+    COUNT(m.id) as subjects
+  FROM students s
+  JOIN marks m ON m.student_id = s.id AND m.class = ? AND m.section = ?
+  WHERE s.class = ? AND s.section = ?
+  GROUP BY s.id
+  HAVING subjects > 0
+  ORDER BY avg_pct DESC
+  LIMIT 10
+`);
+
+const getLeaderboardWithoutSection = database.db.prepare(`
+  SELECT s.name, s.roll_number,
+    ROUND(AVG(m.marks_obtained * 100.0 / m.max_mark), 1) as avg_pct,
+    COUNT(m.id) as subjects
+  FROM students s
+  JOIN marks m ON m.student_id = s.id AND m.class = ? AND (m.section IS NULL OR m.section = '')
+  WHERE s.class = ? AND (s.section IS NULL OR s.section = '')
+  GROUP BY s.id
+  HAVING subjects > 0
+  ORDER BY avg_pct DESC
+  LIMIT 10
+`);
+
 // ── GET /api/marks/classes ────────────────────────────────────────────────────
 // Returns list of distinct classes the current user can access
 app.get('/api/marks/classes', auth.isAuthenticated, (req, res) => {
@@ -1677,7 +1947,7 @@ app.get('/api/marks/classes', auth.isAuthenticated, (req, res) => {
 
     if (req.user.role === 'admin') {
       // Admin sees all classes
-      const rows = database.db.prepare(`SELECT DISTINCT class FROM students WHERE class IS NOT NULL ORDER BY class`).all();
+      const rows = getDistinctClasses.all();
       classes = rows.map(r => r.class);
     } else {
       // Teacher sees only their assigned classes
@@ -1792,7 +2062,7 @@ app.get('/api/marks/report/:studentId', auth.isAuthenticated, (req, res) => {
 // ── POST /api/marks/save ─────────────────────────────────────────────────────
 // Bulk upsert marks. Body: { records: [{studentId, subject, examType, maxMark, marksObtained, grade, className, section}] }
 // OPTIMIZED: Uses new separate class/section model
-app.post('/api/marks/save', auth.isAuthenticated, (req, res) => {
+app.post('/api/marks/save', auth.isAuthenticated, csrfProtection, (req, res) => {
   try {
     const { records } = req.body;
 
@@ -1881,18 +2151,21 @@ app.post('/api/marks/save', auth.isAuthenticated, (req, res) => {
     });
     doAll();
 
-    console.log(`✓ Marks saved: ${saved} records by ${req.user.username}`);
+    // SECURITY: Log without PII
+    console.log(`✓ Marks saved: ${saved} records by user ID ${req.user.id}`);
     res.json({ success: true, saved });
   } catch (error) {
     console.error('Save marks error:', error);
-    res.status(500).json({ success: false, message: 'Failed to save marks: ' + error.message });
+    // SECURITY: Don't expose internal error details
+    console.error('Save marks error:', error);
+    res.status(500).json({ success: false, message: 'Failed to save marks' });
   }
 });
 
 // ── DELETE /api/marks/record ──────────────────────────────────────────────────
 // Delete a single mark record
 // Body: { studentId, subject, examType }
-app.delete('/api/marks/record', auth.isAuthenticated, (req, res) => {
+app.delete('/api/marks/record', auth.isAuthenticated, auth.isAdmin, csrfProtection, (req, res) => {
   try {
     const { studentId, subject, examType } = req.body;
     if (!studentId || !subject || !examType) {
@@ -1923,35 +2196,9 @@ app.get('/api/marks/summary/:className', auth.isAuthenticated, (req, res) => {
     let summary;
 
     if (section) {
-      stmt = database.db.prepare(`
-        SELECT
-          s.id, s.name, s.roll_number,
-          AVG(CASE WHEN m.exam_type = 'midterm' THEN (m.marks_obtained * 100.0 / m.max_mark) END) as midterm_pct,
-          AVG(CASE WHEN m.exam_type = 'final'   THEN (m.marks_obtained * 100.0 / m.max_mark) END) as final_pct,
-          AVG(m.marks_obtained * 100.0 / m.max_mark) as overall_pct,
-          COUNT(m.id) as subjects_entered
-        FROM students s
-        LEFT JOIN marks m ON m.student_id = s.id AND m.class = ? AND m.section = ?
-        WHERE s.class = ? AND s.section = ?
-        GROUP BY s.id
-        ORDER BY s.roll_number
-      `);
-      summary = stmt.all(className, section, className, section);
+      summary = getMarksSummaryWithSection.all(className, section, className, section);
     } else {
-      stmt = database.db.prepare(`
-        SELECT
-          s.id, s.name, s.roll_number,
-          AVG(CASE WHEN m.exam_type = 'midterm' THEN (m.marks_obtained * 100.0 / m.max_mark) END) as midterm_pct,
-          AVG(CASE WHEN m.exam_type = 'final'   THEN (m.marks_obtained * 100.0 / m.max_mark) END) as final_pct,
-          AVG(m.marks_obtained * 100.0 / m.max_mark) as overall_pct,
-          COUNT(m.id) as subjects_entered
-        FROM students s
-        LEFT JOIN marks m ON m.student_id = s.id AND m.class = ? AND (m.section IS NULL OR m.section = '')
-        WHERE s.class = ? AND (s.section IS NULL OR s.section = '')
-        GROUP BY s.id
-        ORDER BY s.roll_number
-      `);
-      summary = stmt.all(className, className);
+      summary = getMarksSummaryWithoutSection.all(className, className);
     }
 
     res.json({ success: true, summary });
@@ -1973,33 +2220,9 @@ app.get('/api/marks/leaderboard/:className', auth.isAuthenticated, (req, res) =>
     let leaderboard;
 
     if (section) {
-      stmt = database.db.prepare(`
-        SELECT s.name, s.roll_number,
-          ROUND(AVG(m.marks_obtained * 100.0 / m.max_mark), 1) as avg_pct,
-          COUNT(m.id) as subjects
-        FROM students s
-        JOIN marks m ON m.student_id = s.id AND m.class = ? AND m.section = ?
-        WHERE s.class = ? AND s.section = ?
-        GROUP BY s.id
-        HAVING subjects > 0
-        ORDER BY avg_pct DESC
-        LIMIT 10
-      `);
-      leaderboard = stmt.all(className, section, className, section);
+      leaderboard = getLeaderboardWithSection.all(className, section, className, section);
     } else {
-      stmt = database.db.prepare(`
-        SELECT s.name, s.roll_number,
-          ROUND(AVG(m.marks_obtained * 100.0 / m.max_mark), 1) as avg_pct,
-          COUNT(m.id) as subjects
-        FROM students s
-        JOIN marks m ON m.student_id = s.id AND m.class = ? AND (m.section IS NULL OR m.section = '')
-        WHERE s.class = ? AND (s.section IS NULL OR s.section = '')
-        GROUP BY s.id
-        HAVING subjects > 0
-        ORDER BY avg_pct DESC
-        LIMIT 10
-      `);
-      leaderboard = stmt.all(className, className);
+      leaderboard = getLeaderboardWithoutSection.all(className, className);
     }
 
     res.json({ success: true, leaderboard });
@@ -2065,4 +2288,12 @@ process.on('uncaughtException', (err) => {
 // Handle unhandled promise rejections (BUG-011)
 process.on('unhandledRejection', (reason, promise) => {
   console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+// OPT-012: Graceful shutdown for nodemon SIGUSR2
+process.on('SIGUSR2', () => {
+  console.log('\nSIGUSR2 received (nodemon restart), shutting down gracefully...');
+  database.db.close();
+  console.log('✓ Database connection closed');
+  process.exit(0);
 });

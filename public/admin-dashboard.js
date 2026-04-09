@@ -1,9 +1,16 @@
 // ── DEEPLINK: restore tab if navigated from analytics page ───────────────────
-// Paste this block at the very TOP of admin-dashboard.js (before everything else)
+// SECURITY FIX: Validate tab name against whitelist before using in selector
 (function restoreTabFromDeeplink() {
     const target = sessionStorage.getItem('adminTab');
     if (!target) return;
     sessionStorage.removeItem('adminTab');
+
+    // SECURITY: Whitelist of valid tab names to prevent DOM-based XSS
+    const VALID_TABS = ['dashboard', 'teachers', 'students', 'attendance', 'marks', 'settings'];
+    if (!VALID_TABS.includes(target)) {
+        console.warn('Invalid tab name detected:', target);
+        return;
+    }
 
     // Wait for DOM to be ready then click the right nav item
     window.addEventListener('DOMContentLoaded', () => {
@@ -12,6 +19,21 @@
     });
 })();
 // ─────────────────────────────────────────────────────────────────────────────
+
+
+// ==========================================
+// SECURITY: XSS Prevention Helper
+// ==========================================
+function escapeHtml(str) {
+    if (str == null) return '';
+    if (typeof str !== 'string') str = String(str);
+    return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
 
 
 // ==========================================
@@ -141,6 +163,7 @@ navItems.forEach(item => {
 
 // ==========================================
 // API HELPER FUNCTIONS
+// CODE QUALITY FIX: Proper error handling with specific types
 // ==========================================
 async function apiCall(endpoint, options = {}) {
     try {
@@ -156,10 +179,73 @@ async function apiCall(endpoint, options = {}) {
         if (response.status === 401) {
             localStorage.removeItem('user');
             window.location.href = '/index.html';
-            return null;
+            return { errorType: 'UNAUTHORIZED', message: 'Session expired' };
+        }
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`API Error ${response.status}:`, errorText);
+            return {
+                errorType: 'HTTP_ERROR',
+                status: response.status,
+                message: `Server error (${response.status})`
+            };
         }
 
         return await response.json();
+    } catch (error) {
+        // CODE QUALITY FIX: Specific error types instead of silent failure
+        console.error('API call failed:', error);
+
+        if (error.name === 'TypeError' || error.message.includes('fetch')) {
+            return {
+                errorType: 'NETWORK_ERROR',
+                message: 'Network connection failed. Check your internet.'
+            };
+        }
+
+        if (error.name === 'AbortError') {
+            return {
+                errorType: 'TIMEOUT',
+                message: 'Request timed out. Please try again.'
+            };
+        }
+
+        return {
+            errorType: 'UNKNOWN',
+            message: 'An unexpected error occurred.'
+        };
+    }
+}
+
+// ==========================================
+// ERROR HANDLING HELPER
+// CODE QUALITY FIX: Display errors consistently
+// ==========================================
+function showError(message, containerId = null) {
+    const displayMessage = message || 'An error occurred. Please try again.';
+
+    if (containerId) {
+        const container = document.getElementById(containerId);
+        if (container) {
+            container.innerHTML = `<div class="error-message">${escapeHtml(displayMessage)}</div>`;
+            return;
+        }
+    }
+
+    alert(displayMessage);
+}
+
+function handleApiResult(result, successCallback, errorContainerId = null) {
+    if (result && result.success) {
+        successCallback(result);
+        return true;
+    }
+
+    const errorMessage = result?.message || result?.error || 'Operation failed';
+    showError(errorMessage, errorContainerId);
+    return false;
+}
     } catch (error) {
         console.error('API call error:', error);
         return null;
@@ -224,24 +310,30 @@ async function loadTeachers() {
         if (teacher.role === 'admin') return;
 
         // Format class display with section (new model)
-        const formatClass = (c) => c.section ? `${c.class_name}-${c.section}` : c.class_name;
+        // SECURITY: Escape class names to prevent XSS
+        const formatClass = (c) => {
+            const className = escapeHtml(c.class_name);
+            const section = escapeHtml(c.section);
+            return section ? `${className}-${section}` : className;
+        };
 
         const ctClasses = teacher.classes.filter(c => c.is_class_teacher).map(formatClass);
         const stClasses = teacher.classes.filter(c => !c.is_class_teacher).map(formatClass);
 
         const ctDisplay = ctClasses.length > 0 ?
-            `<strong style="color: #4caf50;">${ctClasses.join(', ')}</strong>` :
+            `<strong style="color: #4caf50;">${escapeHtml(ctClasses.join(', '))}</strong>` :
             '<span style="color: #999;">Not assigned</span>';
 
         const stDisplay = stClasses.length > 0 ?
-            `<span style="color: #2196f3;">${stClasses.join(', ')}</span>` :
+            `<span style="color: #2196f3;">${escapeHtml(stClasses.join(', '))}</span>` :
             '<span style="color: #999;">Not assigned</span>';
 
+        // SECURITY FIX: Escape all user-controlled data before inserting into HTML
         html += `
             <tr>
-                <td><strong>${teacher.name}</strong></td>
-                <td>${teacher.username}</td>
-                <td>${teacher.email}</td>
+                <td><strong>${escapeHtml(teacher.name)}</strong></td>
+                <td>${escapeHtml(teacher.username)}</td>
+                <td>${escapeHtml(teacher.email)}</td>
                 <td>${ctDisplay}</td>
                 <td>${stDisplay}</td>
                 <td>
@@ -343,23 +435,28 @@ async function loadAssignments() {
 
     Object.keys(groupedByClass).sort().forEach(key => {
         const data = groupedByClass[key];
-        const ctName = data.ct ? data.ct.teacher_name : '<span style="color: #f44336;">⚠️ No CT assigned</span>';
+        // SECURITY FIX: Escape all display data
+        const ctName = data.ct ? escapeHtml(data.ct.teacher_name) : '<span style="color: #f44336;">⚠️ No CT assigned</span>';
         const stNames = data.sts.length > 0 ?
-            data.sts.map(st => st.teacher_name).join(', ') :
+            data.sts.map(st => escapeHtml(st.teacher_name)).join(', ') :
             '<span style="color: #999;">None</span>';
+
+        // SECURITY FIX: Escape class name and section for use in JavaScript strings
+        const escapedClassName = escapeHtml(data.class_name).replace(/'/g, "\\'");
+        const escapedSection = escapeHtml(data.section || '').replace(/'/g, "\\'");
 
         html += `
             <tr>
-                <td><strong>${key}</strong></td>
-                <td>${ctName}${data.ct ? ` <button class="btn-sm btn-danger" onclick="removeAssignment(${data.ct.teacher_id}, '${data.class_name}', '${data.section || ''}')">✕</button>` : ''}</td>
+                <td><strong>${escapeHtml(key)}</strong></td>
+                <td>${ctName}${data.ct ? ` <button class="btn-sm btn-danger" onclick="removeAssignment(${data.ct.teacher_id}, '${escapedClassName}', '${escapedSection}')">✕</button>` : ''}</td>
                 <td>
                     ${data.sts.map(st => `
-                        ${st.teacher_name} <button class="btn-sm btn-danger" onclick="removeAssignment(${st.teacher_id}, '${data.class_name}', '${data.section || ''}')">✕</button>
+                        ${escapeHtml(st.teacher_name)} <button class="btn-sm btn-danger" onclick="removeAssignment(${st.teacher_id}, '${escapedClassName}', '${escapedSection}')">✕</button>
                     `).join('<br>')}
                     ${data.sts.length === 0 ? stNames : ''}
                 </td>
                 <td>
-                    <button class="btn-secondary btn-sm" onclick="quickAssignST('${data.class_name}', '${data.section || ''}')">+ Add ST</button>
+                    <button class="btn-secondary btn-sm" onclick="quickAssignST('${escapedClassName}', '${escapedSection}')">+ Add ST</button>
                 </td>
             </tr>
         `;
@@ -466,19 +563,26 @@ async function loadStudents() {
             '<span style="color: green;">✓</span>' :
             '<span style="color: red;">✗</span>';
 
-        const classDisplay = student.section ? `${student.class}-${student.section}` : (student.class || 'N/A');
+        // SECURITY FIX: Escape class display components
+        const classDisplay = student.section
+            ? `${escapeHtml(student.class)}-${escapeHtml(student.section)}`
+            : escapeHtml(student.class) || 'N/A';
 
+        // SECURITY FIX: Escape student name for use in JavaScript string (onclick handler)
+        const escapedStudentName = escapeHtml(student.name).replace(/'/g, "\\'");
+
+        // SECURITY FIX: Escape all user-controlled data before inserting into HTML
         html += `
             <tr>
-                <td><strong>${student.name}</strong></td>
-                <td><code>${student.card_id}</code></td>
+                <td><strong>${escapeHtml(student.name)}</strong></td>
+                <td><code>${escapeHtml(student.card_id)}</code></td>
                 <td>${classDisplay}</td>
-                <td>${student.roll_number || 'N/A'}</td>
+                <td>${escapeHtml(student.roll_number) || 'N/A'}</td>
                 <td>${hasPassword}</td>
-                <td><span style="color: #2196f3; font-weight: bold;">${student.stats.totalAttendance}</span></td>
+                <td><span style="color: #2196f3; font-weight: bold;">${escapeHtml(student.stats.totalAttendance)}</span></td>
                 <td>
                     <button class="btn-secondary btn-sm" onclick="editStudent(${student.id})">✏️</button>
-                    <button class="btn-warning btn-sm" onclick="resetStudentPassword(${student.id}, '${student.name}')">🔑</button>
+                    <button class="btn-warning btn-sm" onclick="resetStudentPassword(${student.id}, '${escapedStudentName}')">🔑</button>
                     <button class="btn-danger btn-sm" onclick="deleteStudent(${student.id})">🗑️</button>
                 </td>
             </tr>
@@ -623,12 +727,13 @@ async function loadAttendance() {
 
     recordsResult.data.forEach(record => {
         const timestamp = new Date(record.timestamp).toLocaleString();
-        
+
+        // SECURITY FIX: Escape all user-controlled data from attendance records
         html += `
             <tr>
-                <td><strong>${record.student_name}</strong></td>
-                <td>${record.class}</td>
-                <td><code>${record.card_id}</code></td>
+                <td><strong>${escapeHtml(record.student_name)}</strong></td>
+                <td>${escapeHtml(record.class)}</td>
+                <td><code>${escapeHtml(record.card_id)}</code></td>
                 <td>${timestamp}</td>
             </tr>
         `;
@@ -706,7 +811,12 @@ assignClassBtn.addEventListener('click', async () => {
             if (teacher.role === 'admin') return;
 
             // Format class display with section (new model)
-            const formatClass = (c) => c.section ? `${c.class_name}-${c.section}` : c.class_name;
+            // SECURITY FIX: Escape class names
+            const formatClass = (c) => {
+                const className = escapeHtml(c.class_name);
+                const section = escapeHtml(c.section);
+                return section ? `${className}-${section}` : className;
+            };
 
             const ctClass = teacher.classes.find(c => c.is_class_teacher);
             const ctDisplay = ctClass ? formatClass(ctClass) : '';
@@ -714,7 +824,8 @@ assignClassBtn.addEventListener('click', async () => {
             const stCount = teacher.classes.filter(c => !c.is_class_teacher).length;
             const stInfo = stCount > 0 ? ` [ST of ${stCount} classes]` : '';
 
-            teacherSelect.innerHTML += `<option value="${teacher.id}">${teacher.name}${ctInfo}${stInfo}</option>`;
+            // SECURITY FIX: Escape teacher name before inserting into HTML
+            teacherSelect.innerHTML += `<option value="${teacher.id}">${escapeHtml(teacher.name)}${ctInfo}${stInfo}</option>`;
         });
     }
 
@@ -766,6 +877,36 @@ document.getElementById('addTeacherForm').addEventListener('submit', async (e) =
     }
 });
 
+// ==========================================
+// TRANSACTION HELPER
+// CODE QUALITY FIX: Handle partial failures in multi-step operations
+// ==========================================
+async function withTransaction(steps, onSuccess, onError) {
+    const completed = [];
+
+    try {
+        for (const step of steps) {
+            const result = await step.action();
+
+            if (result?.errorType) {
+                // API-level error
+                throw new Error(result.message || 'Operation failed');
+            }
+
+            if (!result?.success) {
+                throw new Error(result?.message || 'Operation failed');
+            }
+
+            completed.push(step.name);
+        }
+
+        onSuccess();
+    } catch (error) {
+        console.error('Transaction failed at steps:', completed, error);
+        onError(error.message, completed);
+    }
+}
+
 document.getElementById('editTeacherForm').addEventListener('submit', async (e) => {
     e.preventDefault();
 
@@ -773,44 +914,58 @@ document.getElementById('editTeacherForm').addEventListener('submit', async (e) 
     const teacherId = formData.get('teacherId');
     const newPassword = formData.get('newPassword');
 
-    const data = {
-        name: formData.get('name'),
-        email: formData.get('email')
-    };
-
-    // First update name and email
-    const updateResult = await apiCall(`/admin/teachers/${teacherId}`, {
-        method: 'PUT',
-        body: JSON.stringify(data)
-    });
-
-    if (!updateResult || !updateResult.success) {
-        alert('Failed to update teacher details');
+    // CODE QUALITY FIX: Validate before starting transaction
+    if (newPassword && newPassword.trim() !== '' && newPassword.length < 4) {
+        showError('Password must be at least 4 characters');
         return;
     }
 
-    // Then reset password if provided
+    const steps = [
+        {
+            name: 'updateProfile',
+            action: () => apiCall(`/admin/teachers/${teacherId}`, {
+                method: 'PUT',
+                body: JSON.stringify({
+                    name: formData.get('name'),
+                    email: formData.get('email')
+                })
+            })
+        }
+    ];
+
+    // Add password reset step only if needed
     if (newPassword && newPassword.trim() !== '') {
-        if (newPassword.length < 4) {
-            alert('Password must be at least 4 characters');
-            return;
-        }
-
-        const passwordResult = await apiCall(`/admin/teachers/${teacherId}/reset-password`, {
-            method: 'POST',
-            body: JSON.stringify({ newPassword })
+        steps.push({
+            name: 'resetPassword',
+            action: () => apiCall(`/admin/teachers/${teacherId}/reset-password`, {
+                method: 'POST',
+                body: JSON.stringify({ newPassword })
+            })
         });
-
-        if (!passwordResult || !passwordResult.success) {
-            alert('Teacher details updated but password reset failed');
-            return;
-        }
     }
 
-    alert('✓ Teacher updated successfully');
-    editTeacherModal.classList.remove('active');
-    e.target.reset();
-    loadTeachers();
+    // CODE QUALITY FIX: Handle partial failures gracefully
+    await withTransaction(
+        steps,
+        () => {
+            // Success - all steps completed
+            alert('✓ Teacher updated successfully');
+            editTeacherModal.classList.remove('active');
+            e.target.reset();
+            loadTeachers();
+        },
+        (errorMessage, completedSteps) => {
+            // Failure - some steps may have succeeded
+            if (completedSteps.includes('updateProfile')) {
+                alert(`Profile updated but password reset failed: ${errorMessage}`);
+                editTeacherModal.classList.remove('active');
+                e.target.reset();
+                loadTeachers();
+            } else {
+                showError(`Failed to update teacher: ${errorMessage}`);
+            }
+        }
+    );
 });
 
 document.getElementById('assignClassForm').addEventListener('submit', async (e) => {

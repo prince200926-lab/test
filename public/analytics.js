@@ -21,6 +21,20 @@ document.getElementById('logoutBtn').addEventListener('click', async () => {
 });
 
 // ==========================================
+// SECURITY: XSS Prevention Helper
+// ==========================================
+function escapeHtml(str) {
+    if (str == null) return '';
+    if (typeof str !== 'string') str = String(str);
+    return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+// ==========================================
 // STATE
 // ==========================================
 let allStudents      = [];
@@ -29,6 +43,8 @@ let allClasses       = [];     // Store all unique class names
 let reg = { slope: 0, intercept: 0, r: 0 };
 let scatterInstance  = null;
 let predInstance     = null;
+let gradeInstance    = null;
+let trendInstance    = null;
 let activeTab        = 'overview';
 let currentBaseClass = 'All';  // Selected base class (e.g., "10")
 let currentSection   = 'All';  // Selected section (e.g., "A")
@@ -66,6 +82,7 @@ function getSection(className) {
 
 // ==========================================
 // API HELPER
+// CODE QUALITY FIX: Added user-facing error messages
 // ==========================================
 async function apiFetch(url, opts = {}) {
     try {
@@ -77,12 +94,81 @@ async function apiFetch(url, opts = {}) {
                 ...(opts.headers || {})
             }
         });
-        if (res.status === 401) { localStorage.clear(); window.location.href = '/index.html'; return null; }
+        if (res.status === 401) {
+            localStorage.clear();
+            window.location.href = '/index.html';
+            showToast('Session expired. Please login again.', 'error');
+            return null;
+        }
+        if (!res.ok) {
+            const errorData = await res.json().catch(() => ({}));
+            const message = errorData.message || `Server error (${res.status})`;
+            showToast(message, 'error');
+            return { error: true, status: res.status, message };
+        }
         return await res.json();
     } catch (err) {
         console.error('apiFetch error:', err);
-        return null;
+        // CODE QUALITY FIX: Show user-facing error message
+        const message = err.name === 'TypeError'
+            ? 'Network error. Check your connection.'
+            : 'Failed to load data. Please try again.';
+        showToast(message, 'error');
+        return { error: true, message };
     }
+}
+
+// ==========================================
+// UI HELPER: Toast notifications for errors
+// CODE QUALITY FIX: User-facing error messages
+// ==========================================
+function showToast(message, type = 'info') {
+    // Remove existing toast
+    const existing = document.querySelector('.toast-notification');
+    if (existing) existing.remove();
+
+    const toast = document.createElement('div');
+    toast.className = `toast-notification ${type}`;
+    toast.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 12px 24px;
+        border-radius: 6px;
+        color: white;
+        font-weight: 500;
+        z-index: 10000;
+        animation: slideIn 0.3s ease;
+        max-width: 300px;
+        word-wrap: break-word;
+    `;
+    toast.style.background = type === 'error' ? '#dc3545' : '#28a745';
+    toast.textContent = message;
+
+    // Add animation styles
+    if (!document.getElementById('toast-styles')) {
+        const style = document.createElement('style');
+        style.id = 'toast-styles';
+        style.textContent = `
+            @keyframes slideIn {
+                from { transform: translateX(100%); opacity: 0; }
+                to { transform: translateX(0); opacity: 1; }
+            }
+            @keyframes fadeOut {
+                from { opacity: 1; }
+                to { opacity: 0; }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+
+    document.body.appendChild(toast);
+
+    // Auto-remove after 4 seconds
+    setTimeout(() => {
+        toast.style.animation = 'fadeOut 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+    }, 4000);
 }
 
 // ==========================================
@@ -320,12 +406,16 @@ function renderOverview() {
         </div>
     `;
 
+    // Cleanup existing chart instances to prevent memory leaks
+    if (gradeInstance) { gradeInstance.destroy(); gradeInstance = null; }
+    if (trendInstance) { trendInstance.destroy(); trendInstance = null; }
+
     setTimeout(() => {
         const gc = document.getElementById('gradeChart');
         const tc = document.getElementById('trendChart');
         if (!gc || !tc) return;
 
-        new Chart(gc, {
+        gradeInstance = new Chart(gc, {
             type: 'bar',
             data: {
                 labels: gradeDist.map(d => d.g),
@@ -347,7 +437,7 @@ function renderOverview() {
         });
 
         const trendPts = [60,65,70,75,80,85,90,95,100];
-        new Chart(tc, {
+        trendInstance = new Chart(tc, {
             type: 'line',
             data: {
                 labels: trendPts.map(v => v + '%'),
@@ -382,14 +472,16 @@ function renderOverview() {
             </tr></thead>
             <tbody>
             ${s.map(st => {
-                const section = st.class ? st.class.split('-')[1] || '' : '';
+                // SECURITY FIX: Extract and escape section from class name
+                const section = st.class ? escapeHtml(st.class.split('-')[1] || '') : '';
+                // SECURITY FIX: Escape all student data before inserting into HTML
                 return `
                 <tr>
-                    <td><strong>${st.name}</strong></td>
+                    <td><strong>${escapeHtml(st.name)}</strong></td>
                     ${showSectionCol
                         ? `<td><span style="background:#e3f2fd;padding:2px 8px;border-radius:4px;font-size:12px;">${section}</span></td>`
-                        : `<td style="color:#888;">${st.class || '—'}</td>`}
-                    <td style="color:#888;">${st.roll_number || '—'}</td>
+                        : `<td style="color:#888;">${escapeHtml(st.class) || '—'}</td>`}
+                    <td style="color:#888;">${escapeHtml(st.roll_number) || '—'}</td>
                     <td class="${attClass(st.attendance)}">${st.attendance}%</td>
                     <td>${st.midterm ? Math.round(st.midterm) + '%' : '—'}</td>
                     <td>${st.final_score ? Math.round(st.final_score) + '%' : '—'}</td>
@@ -483,8 +575,9 @@ function renderScatter() {
                         callbacks: {
                             label: ctx => {
                                 const d = ctx.raw;
+                                // SECURITY FIX: Escape student name in tooltip
                                 return d.name
-                                    ? `${d.name}: att ${d.x}%, score ${d.y}%`
+                                    ? `${escapeHtml(d.name)}: att ${d.x}%, score ${d.y}%`
                                     : `Regression: ${d.y}%`;
                             }
                         }
@@ -534,17 +627,19 @@ function renderRisk() {
                 ? 'Send attendance warning letter. Schedule teacher–student meeting.'
                 : 'Assign peer tutor. Weekly progress check-in.';
 
-        // Show section info in multi-section view
-        const section = st.class ? st.class.split('-')[1] || '' : '';
+        // SECURITY FIX: Extract and escape section from class name
+        const section = st.class ? escapeHtml(st.class.split('-')[1] || '') : '';
+        // SECURITY FIX: Escape class display data
         const classDisplay = currentBaseClass !== 'All' && currentSection === 'All' && section
-            ? `Sec ${section} · Roll ${st.roll_number || '—'}`
-            : `${st.class || '—'} · Roll ${st.roll_number || '—'}`;
+            ? `Sec ${section} · Roll ${escapeHtml(st.roll_number) || '—'}`
+            : `${escapeHtml(st.class) || '—'} · Roll ${escapeHtml(st.roll_number) || '—'}`;
 
+        // SECURITY FIX: Escape all student data before inserting into HTML
         return `
         <div class="risk-card ${isCrit ? 'critical' : ''}">
             <div class="risk-header">
                 <div>
-                    <div class="risk-name">${st.name}</div>
+                    <div class="risk-name">${escapeHtml(st.name)}</div>
                     <div class="risk-sub">${classDisplay}</div>
                 </div>
                 <div class="risk-tags">

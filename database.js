@@ -27,6 +27,19 @@ try {
 // Enable foreign keys
 db.pragma('foreign_keys = ON');
 
+// OPT-006: Enable WAL mode for better concurrent read/write performance
+// WAL = Write-Ahead Logging allows readers to not block writers
+// synchronous = NORMAL balances durability with performance
+try {
+  db.pragma('journal_mode = WAL');
+  db.pragma('synchronous = NORMAL');
+  db.pragma('temp_store = memory');
+  db.pragma('mmap_size = 30000000000');  // ~30GB memory mapped I/O
+  console.log('✓ Database optimized: WAL mode enabled');
+} catch (error) {
+  console.warn('⚠ Could not enable WAL mode:', error.message);
+}
+
 // ==========================================
 // CREATE TABLES
 // ==========================================
@@ -512,8 +525,19 @@ const getTeacherById = db.prepare(`
 `);
 
 const getAllTeachers = db.prepare(`
-  SELECT id, username, name, email, role, created_at, last_login 
+  SELECT id, username, name, email, role, created_at, last_login
   FROM teachers ORDER BY name ASC
+`);
+
+// IMP-003: Paginated teachers query
+const getTeachersPaginated = db.prepare(`
+  SELECT id, username, name, email, role, created_at, last_login
+  FROM teachers ORDER BY name ASC
+  LIMIT ? OFFSET ?
+`);
+
+const getTeachersCount = db.prepare(`
+  SELECT COUNT(*) as total FROM teachers
 `);
 
 const updateTeacher = db.prepare(`
@@ -649,6 +673,16 @@ const getAllStudents = db.prepare(`
   SELECT * FROM students ORDER BY name ASC
 `);
 
+// IMP-003: Paginated students query
+const getStudentsPaginated = db.prepare(`
+  SELECT * FROM students ORDER BY name ASC
+  LIMIT ? OFFSET ?
+`);
+
+const getStudentsCount = db.prepare(`
+  SELECT COUNT(*) as total FROM students
+`);
+
 const getStudentsByClass = db.prepare(`
   SELECT * FROM students WHERE class = ? AND (section = ? OR section IS NULL OR section = '') ORDER BY section, roll_number ASC
 `);
@@ -698,6 +732,16 @@ const recordAttendance = db.prepare(`
 
 const getAllAttendance = db.prepare(`
   SELECT * FROM attendance ORDER BY recorded_at DESC LIMIT ?
+`);
+
+// IMP-003: Paginated attendance query
+const getAttendancePaginated = db.prepare(`
+  SELECT * FROM attendance ORDER BY recorded_at DESC
+  LIMIT ? OFFSET ?
+`);
+
+const getAttendanceCount = db.prepare(`
+  SELECT COUNT(*) as total FROM attendance
 `);
 
 const getLatestAttendance = db.prepare(`
@@ -837,48 +881,63 @@ const getAttendanceStatsByClassAndSection = db.prepare(`
 module.exports = {
   db,
   
-  // Teacher operations
+  // Teacher operations - OPT-002: Converted to async bcrypt
   teachers: {
-    create: (username, password, name, email, role) => {
+    create: async (username, password, name, email, role) => {
+      // CODE QUALITY FIX: bcryptjs uses hashSync, not async hash
       const hashedPassword = bcrypt.hashSync(password, 10);
       return createTeacher.run(username, hashedPassword, name, email, role);
     },
-    
+
     getByUsername: (username) => {
       return getTeacherByUsername.get(username);
     },
-    
+
     getById: (id) => {
       return getTeacherById.get(id);
     },
-    
+
     getAll: () => {
       return getAllTeachers.all();
     },
-    
+
+    getPaginated: (page = 1, limit = 50) => {
+      const offset = (page - 1) * limit;
+      return {
+        data: getTeachersPaginated.all(limit, offset),
+        pagination: {
+          page,
+          limit,
+          total: getTeachersCount.get().total
+        }
+      };
+    },
+
     update: (id, name, email) => {
       return updateTeacher.run(name, email, id);
     },
-    
+
     updateRole: (id, role) => {
       return updateTeacherRole.run(role, id);
     },
-    
+
     delete: (id) => {
       return deleteTeacher.run(id);
     },
-    
+
     updateLastLogin: (id) => {
       return updateLastLogin.run(id);
     },
 
-    updatePassword: (id, newPassword) => {
+    updatePassword: async (id, newPassword) => {
+      // CODE QUALITY FIX: bcryptjs uses hashSync
       const hashedPassword = bcrypt.hashSync(newPassword, 10);
       return updateTeacherPassword.run(hashedPassword, id);
     },
 
-    verifyPassword: (plainPassword, hashedPassword) => {
-      return bcrypt.compareSync(plainPassword, hashedPassword);
+    verifyPassword: async (plainPassword, hashedPassword) => {
+      // bcryptjs compare supports await/promise
+      return await bcrypt.compare(plainPassword, hashedPassword);
     }
   },
   
@@ -946,9 +1005,10 @@ module.exports = {
     }
   },
   
-  // Student operations - WITH PASSWORD SUPPORT
+  // Student operations - WITH PASSWORD SUPPORT - OPT-002: Converted to async bcrypt
   students: {
-    register: (cardId, name, studentClass, section, rollNumber, password) => {
+    register: async (cardId, name, studentClass, section, rollNumber, password) => {
+      // CODE QUALITY FIX: bcryptjs uses hashSync
       const hashedPassword = password ? bcrypt.hashSync(password, 10) : null;
       return registerStudent.run(cardId, name, studentClass, section, rollNumber, hashedPassword);
     },
@@ -965,6 +1025,18 @@ module.exports = {
       return getAllStudents.all();
     },
 
+    getPaginated: (page = 1, limit = 50) => {
+      const offset = (page - 1) * limit;
+      return {
+        data: getStudentsPaginated.all(limit, offset),
+        pagination: {
+          page,
+          limit,
+          total: getStudentsCount.get().total
+        }
+      };
+    },
+
     getByClass: (className, section) => {
       if (section) {
         return getStudentsByClassAndSection.all(className, section);
@@ -972,9 +1044,10 @@ module.exports = {
       return getStudentsByClass.all(className, '');
     },
 
-    update: (id, cardId, name, studentClass, section, rollNumber, password) => {
+    update: async (id, cardId, name, studentClass, section, rollNumber, password) => {
       if (password) {
         // Update with new password
+        // CODE QUALITY FIX: bcryptjs uses hashSync
         const hashedPassword = bcrypt.hashSync(password, 10);
         return updateStudentWithPassword.run(cardId, name, studentClass, section, rollNumber, hashedPassword, id);
       } else {
@@ -982,15 +1055,16 @@ module.exports = {
         return updateStudent.run(cardId, name, studentClass, section, rollNumber, id);
       }
     },
-    
-    updatePassword: (id, newPassword) => {
+
+    updatePassword: async (id, newPassword) => {
+      // CODE QUALITY FIX: bcryptjs uses hashSync
       const hashedPassword = bcrypt.hashSync(newPassword, 10);
       return updateStudentPassword.run(hashedPassword, id);
     },
-    
-    verifyPassword: (plainPassword, hashedPassword) => {
+
+    verifyPassword: async (plainPassword, hashedPassword) => {
       if (!hashedPassword) return false;
-      return bcrypt.compareSync(plainPassword, hashedPassword);
+      return await bcrypt.compare(plainPassword, hashedPassword);
     },
     
     delete: (id) => {
@@ -1011,6 +1085,18 @@ module.exports = {
 
     getAll: (limit = 100) => {
       return getAllAttendance.all(limit);
+    },
+
+    getPaginated: (page = 1, limit = 50) => {
+      const offset = (page - 1) * limit;
+      return {
+        data: getAttendancePaginated.all(limit, offset),
+        pagination: {
+          page,
+          limit,
+          total: getAttendanceCount.get().total
+        }
+      };
     },
 
     getLatest: () => {
@@ -1101,15 +1187,79 @@ module.exports = {
     
     getByStudentId: (studentId, limit = 50) => {
       const stmt = db.prepare(`
-        SELECT * FROM attendance 
-        WHERE student_id = ? 
-        ORDER BY timestamp DESC 
+        SELECT * FROM attendance
+        WHERE student_id = ?
+        ORDER BY timestamp DESC
         LIMIT ?
       `);
       return stmt.all(studentId, limit);
+    },
+
+    // OPT-003: Batch get attendance stats for all students in one query
+    getStatsForAllStudents: () => {
+      const stmt = db.prepare(`
+        SELECT
+          student_id,
+          COUNT(*) as total_attendance,
+          MAX(timestamp) as last_seen
+        FROM attendance
+        WHERE student_id IS NOT NULL
+        GROUP BY student_id
+      `);
+      const results = stmt.all();
+      // Convert to map for O(1) lookup
+      const statsMap = new Map();
+      for (const row of results) {
+        statsMap.set(row.student_id, {
+          totalAttendance: row.total_attendance,
+          lastSeen: row.last_seen
+        });
+      }
+      return statsMap;
+    },
+
+    // OPT-004: Batch get present days for all students in one query
+    getPresentDaysForAllStudents: () => {
+      const stmt = db.prepare(`
+        SELECT
+          student_id,
+          COUNT(DISTINCT DATE(timestamp)) as present_days
+        FROM attendance
+        WHERE student_id IS NOT NULL
+        GROUP BY student_id
+      `);
+      const results = stmt.all();
+      const map = new Map();
+      for (const row of results) {
+        map.set(row.student_id, row.present_days);
+      }
+      return map;
+    }
+  },
+
+  // OPT-004: Batch marks operations
+  marks: {
+    getAllStats: () => {
+      const stmt = db.prepare(`
+        SELECT
+          student_id,
+          ROUND(AVG(CASE WHEN exam_type='midterm' THEN marks_obtained*100.0/max_mark END)) as midterm_pct,
+          ROUND(AVG(CASE WHEN exam_type='final' THEN marks_obtained*100.0/max_mark END)) as final_pct,
+          ROUND(AVG(marks_obtained*100.0/max_mark)) as avg_score
+        FROM marks
+        GROUP BY student_id
+      `);
+      const results = stmt.all();
+      const map = new Map();
+      for (const row of results) {
+        map.set(row.student_id, {
+          midterm_pct: row.midterm_pct || 0,
+          final_pct: row.final_pct || 0,
+          avg_score: row.avg_score || 0
+        });
+      }
+      return map;
     }
   }
-
-  
 };
 

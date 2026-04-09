@@ -46,6 +46,20 @@
 })();
 
 // ==========================================
+// SECURITY: XSS Prevention Helper
+// ==========================================
+function escapeHtml(str) {
+    if (str == null) return '';
+    if (typeof str !== 'string') str = String(str);
+    return str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+}
+
+// ==========================================
 // SESSION AND AUTH
 // ==========================================
 // Session is now stored in httpOnly cookie (secure, not accessible to XSS)
@@ -106,13 +120,23 @@ async function apiCall(endpoint, options = {}) {
         if (response.status === 401) {
             localStorage.clear();
             window.location.href = '/index.html';
-            return null;
+            return { error: 'UNAUTHORIZED', message: 'Session expired. Please login again.' };
+        }
+
+        if (!response.ok) {
+            const errorText = await response.text();
+            console.error(`HTTP ${response.status}:`, errorText);
+            return { error: 'HTTP_ERROR', status: response.status, message: `Server error (${response.status})` };
         }
 
         return await response.json();
     } catch (error) {
         console.error('API call error:', error);
-        return null;
+        // CODE QUALITY FIX: Distinguish network errors from other failures
+        if (error.name === 'TypeError' || error.message.includes('fetch')) {
+            return { error: 'NETWORK_ERROR', message: 'Network connection failed. Check your internet.' };
+        }
+        return { error: 'UNKNOWN_ERROR', message: 'An unexpected error occurred.' };
     }
 }
 
@@ -302,11 +326,12 @@ async function loadCTData() {
 
         const presentList = document.getElementById('ctPresentList');
         if (result.data.records && result.data.records.length > 0) {
+            // SECURITY FIX: Escape student data before inserting into HTML
             presentList.innerHTML = result.data.records.map(r => `
                 <div class="student-item present">
                     <div>
-                        <div class="student-name">${r.student_name}</div>
-                        <div class="student-roll">Roll: ${r.student_id || 'N/A'}</div>
+                        <div class="student-name">${escapeHtml(r.student_name)}</div>
+                        <div class="student-roll">Roll: ${escapeHtml(r.student_id) || 'N/A'}</div>
                     </div>
                     <div style="font-size: 12px; color: #666;">
                         ${new Date(r.timestamp).toLocaleTimeString()}
@@ -319,11 +344,12 @@ async function loadCTData() {
 
         const absentList = document.getElementById('ctAbsentList');
         if (result.data.absentStudents && result.data.absentStudents.length > 0) {
+            // SECURITY FIX: Escape student data before inserting into HTML
             absentList.innerHTML = result.data.absentStudents.map(s => `
                 <div class="student-item absent">
                     <div>
-                        <div class="student-name">${s.name}</div>
-                        <div class="student-roll">Roll: ${s.roll_number || 'N/A'}</div>
+                        <div class="student-name">${escapeHtml(s.name)}</div>
+                        <div class="student-roll">Roll: ${escapeHtml(s.roll_number) || 'N/A'}</div>
                     </div>
                 </div>
             `).join('');

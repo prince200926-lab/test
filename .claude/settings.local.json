@@ -18,7 +18,10 @@
       "Bash(npm run:*)",
       "Bash(node:*)",
       "Bash(npx kill-port:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "Bash(xargs wc:*)",
+      "Bash(npm test:*)",
+      "Bash(npm audit:*)"
     ]
   }
 }
